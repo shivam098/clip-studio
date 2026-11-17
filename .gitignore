@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/
+runtime/
+*.sqlite*
+*.log
+__pycache__/
+.venv/
+coverage/
+.playwright-mcp/

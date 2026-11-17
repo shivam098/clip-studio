@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clip Studio | Local creator workspace</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b6f0cd'/%3E%3Ctext x='7' y='24' font-family='sans-serif' font-size='25' fill='%2314261d'%3EC%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/"> <span class="mark">C</span> CLIP STUDIO <small>LOCAL EDITION</small></a>
+    <nav aria-label="Main navigation">
+      <button class="nav active" data-tab="studio">Studio <span>01</span></button>
+      <button class="nav" data-tab="live">Live capture <span>02</span></button>
+      <button class="nav" data-tab="publishing">Publishing <span>03</span></button>
+      <button class="nav" data-tab="settings">Privacy & setup <span>04</span></button>
+    </nav>
+    <div class="sidebar-bottom"><span class="status-dot"></span> Your machine. Your media.<p>No cloud AI or publishing<br>unless you explicitly enable it.</p><span class="version">INDEPENDENTLY BUILT / v0.1</span></div>
+  </aside>
+  <main>
+    <header>
+      <div><p class="eyebrow">YOUR CREATOR WORKSPACE</p><h1>Make the moment matter.</h1></div>
+      <div class="workspace-picker"><label for="workspace">Workspace</label><select id="workspace"></select><button class="quiet" id="new-workspace">+ New</button></div>
+    </header>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section id="studio" class="page">
+      <div class="hero"><div><p class="eyebrow">FROM LONG-FORM TO ONE GOOD IDEA</p><h2>A small studio.<br>A shorter story.</h2><p>Bring a video, find a moment, make it yours.<br>Review everything before it leaves your machine.</p></div><div class="hero-right"><div class="aspect-demo"><span>9:16</span><strong>YOUR NEXT<br>GREAT CLIP</strong><i>captions included</i></div></div></div>
+      <div class="section-title"><h2>Source library</h2><button id="demo" class="quiet">Create synthetic demo</button></div>
+      <div class="import-grid">
+        <form id="upload-form" class="panel"><h3>Upload a video</h3><p>MP4, MOV, WebM or MKV · up to 2 GiB<br>Stored only on this computer.</p><label for="video-file">Video file</label><input id="video-file" type="file" accept="video/*" required><button type="submit">Add to library</button></form>
+        <form id="url-form" class="panel"><h3>Import from a link</h3><p>YouTube, Vimeo and Twitch; availability depends on the source. Only import media you have rights to use.</p><label for="source-url">Video URL</label><input id="source-url" type="url" placeholder="https://…" required><label class="check"><input id="url-consent" type="checkbox" required> Contact the source site to download this video.</label><button type="submit" class="secondary">Import video</button></form>
+      </div>
+      <div id="assets" class="asset-grid"></div>
+      <div id="empty-library" class="empty">Your library is empty. Upload a video or try the synthetic demo.</div>
+      <section id="editor" class="hidden">
+        <div class="section-title"><h2 id="editor-heading">Review your moment</h2><span id="source-info" class="tag"></span></div>
+        <div class="editor-grid">
+          <div class="panel preview-panel">
+            <video id="source-preview" controls preload="metadata"></video>
+            <p id="source-name"></p>
+            <div class="button-row"><button id="transcribe">Transcribe locally</button><button id="heuristic" class="secondary">Find moments (non-AI)</button></div>
+            <details><summary>Use a configured AI model</summary><p>Only transcript text is sent. No video, audio or frames. Configure your endpoint under Privacy & setup.</p><label class="check"><input id="model-consent" type="checkbox"> I approve sending this transcript to my configured remote endpoint, if remote.</label><button id="model-analysis" class="secondary">Find moments with model</button></details>
+            <div id="suggestions"></div>
+            <details><summary>Edit source transcript</summary><p id="transcript-source"></p><label for="transcript">One caption per line: start seconds | end seconds | text</label><textarea id="transcript" rows="9" spellcheck="true"></textarea><button id="save-transcript" class="secondary">Save transcript</button></details>
+          </div>
+          <form id="clip-form" class="panel">
+            <p class="eyebrow">CLIP EDITOR</p><h3 id="clip-mode">New clip</h3>
+            <label for="clip-name">Clip name</label><input id="clip-name" value="My first clip" maxlength="160" required>
+            <div class="two-col"><div><label for="clip-start">Start (seconds)</label><input id="clip-start" type="number" step="0.01" min="0" value="0" required><button id="set-start" type="button" class="text-button">Use playhead</button></div><div><label for="clip-end">End (seconds)</label><input id="clip-end" type="number" step="0.01" min="0" required><button id="set-end" type="button" class="text-button">Use playhead</button></div></div>
+            <label for="clip-hook">Opening title / hook (optional)</label><input id="clip-hook" maxlength="160" placeholder="One idea worth sharing">
+            <label for="clip-framing">Vertical framing</label><select id="clip-framing"><option value="fit">Fit entire frame · dark letterbox</option><option value="crop">Center crop · fill 9:16</option></select>
+            <label for="clip-captions">Timed captions (source-video seconds)</label><textarea id="clip-captions" rows="6" placeholder="0 | 3.2 | A clear opening line"></textarea>
+            <p class="muted">720 × 1280 MP4 · maximum 3 minutes · title shown for 4 seconds. Review transcript accuracy and center crop before sharing.</p>
+            <div class="button-row"><button type="submit">Save clip draft</button><button id="new-clip" type="button" class="secondary">New draft</button></div>
+          </form>
+        </div>
+      </section>
+      <div class="section-title"><h2>Clip desk</h2><span class="muted">Rendering never publishes automatically</span></div>
+      <div id="clips" class="clip-grid"></div>
+    </section>
+    <section id="live" class="page hidden">
+      <div class="section-title"><div><p class="eyebrow">CAPTURE, REVIEW, CLIP</p><h2>Keep up with the live moment.</h2></div></div>
+      <p class="lead">Completed 20-second segments appear in your source library. Manual clipping works independently of transcript or AI jobs. Buffers stay local until you explicitly remove unused ones.</p>
+      <form id="live-form" class="panel compact">
+        <label for="live-name">Stream name</label><input id="live-name" value="Live session" required>
+        <label for="live-url">Public YouTube or Twitch live URL</label><input id="live-url" type="url" placeholder="https://www.twitch.tv/…">
+        <label class="check"><input id="live-consent" type="checkbox"> Contact the provider to capture this stream. I have permission to use it.</label>
+        <div class="button-row"><button type="submit">Start capture</button><button type="button" id="synthetic-live" class="secondary">Test with synthetic live feed</button></div>
+      </form>
+      <div id="live-list"></div>
+    </section>
+    <section id="publishing" class="page hidden">
+      <div class="section-title"><div><p class="eyebrow">REVIEW BEFORE RELEASE</p><h2>A deliberate publishing queue.</h2></div><button id="publishing-toggle" class="secondary"></button></div>
+      <div class="warning">External integrations require your own authorized access tokens and platform approvals. They have not been verified against a real account in this trial. OAuth login/refresh is not built in; update expiring tokens manually. Verify the destination identity, enable the account and dispatch, then explicitly approve a clip. Tokens are rechecked against that identity before upload.</div>
+      <div class="import-grid">
+        <form id="account-form" class="panel">
+          <h3>Connect an authorized account</h3><label for="account-platform">Platform</label><select id="account-platform"><option value="youtube">YouTube</option><option value="instagram">Instagram (Facebook Login)</option><option value="tiktok">TikTok Direct Post</option></select>
+          <label for="account-name">Account label (identify the destination)</label><input id="account-name" required>
+          <label for="account-token">Authorized access token</label><input id="account-token" type="password" autocomplete="off" required>
+          <div id="instagram-fields" class="hidden"><label for="instagram-id">Instagram professional-account ID</label><input id="instagram-id"><label for="instagram-version">Supported Graph API version</label><input id="instagram-version" placeholder="v24.0"></div>
+          <div class="two-col"><div><label for="spacing">Minimum spacing (minutes)</label><input id="spacing" type="number" min="1" max="1440" value="60" required></div><div><label for="daily-cap">Rolling 24-hour cap</label><input id="daily-cap" type="number" min="1" max="100" value="3" required></div></div>
+          <p class="muted">Windows protects saved tokens with current-user DPAPI. Account is saved disabled. TikTok: video.publish scope and audited app; files ≤64 MB. Instagram: professional account, Facebook Login permissions; no public media host needed.</p>
+          <button type="submit">Save disabled account</button>
+        </form>
+        <form id="publish-form" class="panel">
+          <h3>Approve one scheduled post</h3><label for="publish-clip">Rendered clip</label><select id="publish-clip" required></select>
+          <label for="publish-account">Destination account</label><select id="publish-account" required></select>
+          <label for="publish-title">Post title</label><input id="publish-title" maxlength="100" required>
+          <label for="publish-description">Description / caption</label><textarea id="publish-description" maxlength="1800" rows="3"></textarea>
+          <label for="publish-privacy">Privacy (choose explicitly)</label><select id="publish-privacy" required></select>
+          <label class="check"><input id="made-for-kids" type="checkbox"> YouTube: made for kids</label>
+          <label for="publish-time">Earliest dispatch (local time; blank means now)</label><input id="publish-time" type="datetime-local">
+          <label class="check"><input id="publish-consent" type="checkbox" required> I approve sending this rendered video and metadata to this account, with the selected visibility.</label>
+          <button type="submit">Approve & queue</button><p class="muted">Dispatch-time spacing and caps can delay this time. The server must be running. Ambiguous outcomes block this account until reconciled; there is no blind retry.</p>
+        </form>
+      </div>
+      <h3>Accounts</h3><div id="accounts"></div><h3>Outbox</h3><div id="publications"></div>
+    </section>
+    <section id="settings" class="page hidden">
+      <p class="eyebrow">LOCAL BY DEFAULT, EXPLICIT BY DESIGN</p><h2>Know where your data goes.</h2>
+      <div class="privacy-grid">
+        <article class="panel"><h3>Stays on this machine</h3><p>Uploaded video, extracted speech, transcripts, thumbnails (none generated), caption edits, renders, live buffers and the SQLite job database. Speech uses an installed faster-whisper model in offline mode. Models are never downloaded during transcription.</p><p>No analytics, external fonts, automatic uploads, folder scanning or public tunnel.</p></article>
+        <article class="panel"><h3>Leaves only when requested</h3><p>URL import/live capture contacts the source platform (IP and source URL visible there). Configured remote AI receives transcript text, not video, audio or images, after per-run approval. Publishing sends the selected video, text and credentials to the selected platform.</p><p>No remote transcription or frame-analysis feature exists in this build. A provider's own retention policy applies to data you send.</p></article>
+      </div>
+      <form id="ai-form" class="panel compact">
+        <h3>Optional moment-selection model</h3><p>OpenAI-compatible chat-completions endpoint. Local Ollama/LM Studio can keep text local; remote HTTPS requires your consent. No endpoint is preconfigured.</p>
+        <label for="ai-endpoint">Complete endpoint URL</label><input id="ai-endpoint" type="url" placeholder="http://127.0.0.1:11434/v1/chat/completions" required>
+        <label for="ai-model">Installed / provider model name</label><input id="ai-model" required>
+        <label for="ai-token">API key (optional; blank keeps the saved key)</label><input id="ai-token" type="password" autocomplete="off">
+        <label class="check"><input id="ai-enabled" type="checkbox"> Enable this model for explicit requests</label>
+        <label class="check"><input id="ai-consent" type="checkbox"> If remote, I approve transcript processing at this endpoint. I will also approve each run.</label>
+        <button type="submit">Save model configuration</button>
+      </form>
+      <div class="panel"><h3>Local runtime</h3><p id="runtime"></p><button id="diagnostics" class="secondary">Check dependencies</button><pre id="diagnostic-result"></pre><p>See the repository README for model installation, token scopes, start/stop, retention and current integration limits. Data is retained until you remove it; uninstalling the app does not erase the data directory.</p></div>
+    </section>
+    <section class="jobs-section"><div class="section-title"><h2>Activity</h2><span id="connection" class="tag">Connecting</span></div><div id="jobs"></div></section>
+    <footer>Built independently for creators who want control. Local-first, not a hosted service.</footer>
+  </main>
+  <dialog id="workspace-dialog"><form id="workspace-form"><h2>New workspace</h2><label for="workspace-name">Workspace name</label><input id="workspace-name" required><label for="creator-name">Creator name</label><input id="creator-name" required><div class="button-row"><button type="submit">Create workspace</button><button id="dismiss-workspace" type="button" class="secondary">Cancel</button></div></form></dialog>
+</body>
+</html>
