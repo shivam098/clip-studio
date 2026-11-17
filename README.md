@@ -53,6 +53,10 @@ If dependencies are not on PATH, create `%LOCALAPPDATA%\ClipStudio\data\config.j
 
 `model` can be a faster-whisper model name already cached locally or an absolute model directory. Transcription always uses `local_files_only=True` and offline environment settings; a missing model fails explicitly rather than downloading or uploading anything. `CLIP_FFMPEG`, `CLIP_FFPROBE`, `CLIP_PYTHON`, `CLIP_WHISPER_MODEL`, `CLIP_STUDIO_DATA` and `PORT` override defaults. Privacy & setup includes dependency diagnostics.
 
+The downloader explicitly uses the same Node executable as Clip Studio, rather than relying on yt-dlp's Deno-only default. `requirements-download.txt` includes yt-dlp's matching `yt-dlp-ejs` scripts through its `default` dependency group. Runtime downloading of extra JavaScript components is disabled. Install requirements with the Python interpreter configured above (prefer an app-specific virtual environment).
+
+This fixes local runtime setup, not YouTube's separate sign-in/anti-bot restrictions. A blocked request stops with an explicit explanation; Clip Studio does not retry through alternate clients, extract browser cookies, or complete verification. Use Upload with a local video you are authorized to download when the source requires verification.
+
 Stop gracefully in another terminal:
 
 ```powershell

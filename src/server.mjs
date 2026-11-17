@@ -173,6 +173,8 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
           ['ffmpeg', config.ffmpeg, ['-version']], ['ffprobe', config.ffprobe, ['-version']],
           ['speech', config.python, ['-c', "from faster_whisper import WhisperModel; print('faster-whisper available')"]],
           ['downloader', config.python, ['-m', 'yt_dlp', '--version']],
+          ['downloaderScripts', config.python, ['-c', "from importlib.metadata import version; print('yt-dlp-ejs ' + version('yt-dlp-ejs'))"]],
+          ['javascriptRuntime', process.execPath, ['--version']],
         ]) {
           try { checks[name] = { ok: true, detail: (await run(command, args, { signal: AbortSignal.timeout(15000) })).stdout.split('\n')[0] }; }
           catch (error) { checks[name] = { ok: false, detail: error.message }; }
