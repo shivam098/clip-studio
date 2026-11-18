@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://*.trycloudflare.com; base-uri 'none'; form-action 'none'">
+  <title>Clip Studio | Open the editor</title>
+  <link rel="stylesheet" href="./launcher.css">
+  <script type="module" src="./launcher.js"></script>
+</head>
+<body>
+  <main>
+    <p class="brand">CLIP STUDIO <span>/</span> REMOTE</p>
+    <h1>Your editing room.</h1>
+    <p>Trim a video from your device, add titles and captions, and save a new clip. Your video stays in your browser.</p>
+    <section aria-live="polite">
+      <h2 id="state">Checking availability&hellip;</h2>
+      <p id="detail">This bookmark checks for the current public editor. No account needed.</p>
+    </section>
+    <button id="open" hidden>Open editor</button>
+    <button id="retry" hidden>Check again</button>
+    <noscript>Turn on JavaScript in a current browser to check this link. There is no permanent direct tunnel address.</noscript>
+    <footer>Bookmark this page, not the temporary tunnel. Only the browser editor is shared, never the desktop library.</footer>
+  </main>
+</body>
+</html>
