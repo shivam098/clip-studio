@@ -1,0 +1,2 @@
+# Explicit empty config: never load another application's tunnel, credentials or ingress.
+{}
