@@ -1,11 +1,8 @@
 const $ = id => document.getElementById(id);
 const video = $('source'), canvas = $('frame'), ctx = canvas.getContext('2d', { alpha: false });
-const Audio = window.AudioContext || window.webkitAudioContext;
-const mime = window.MediaRecorder && ['video/mp4;codecs=avc1,mp4a.40.2', 'video/webm;codecs=vp8,opus', 'video/mp4', 'video/webm']
-  .find(type => MediaRecorder.isTypeSupported?.(type));
-const canExport = Boolean(ctx && mime && canvas.captureStream && Audio?.prototype.createMediaStreamDestination);
+const canExport = Boolean(ctx && window.VideoEncoder && window.VideoDecoder);
 const maxBytes = 256 * 1024 * 1024, maxExport = 32 * 1024 * 1024;
-let ready = false, revision = 0, sourceUrl, resultUrl, audio, audioSource, active = null, clip = null;
+let ready = false, revision = 0, sourceUrl, resultUrl, active = null, clip = null;
 
 function message(text, error = false) {
   $('status').textContent = text;
@@ -39,7 +36,8 @@ function controls() {
   $('file').disabled = !!active;
   $('preview').disabled = !clip || !!active;
   $('export').disabled = !clip || !canExport || !!active;
-  $('cancel').hidden = !active;
+  $('transport').hidden = !active;
+  if (active) $('progress').textContent = active.exporting ? 'Exporting this cut…' : 'Previewing this cut…';
 }
 function update() {
   clearResult();
@@ -72,16 +70,19 @@ function overlay(text, y, size) {
   ctx.fillStyle = '#fff';
   lines.forEach((value, i) => ctx.fillText(value, canvas.width / 2, top + (i + .5) * step, max));
 }
-function draw() {
-  if (!ready || video.readyState < 2) return;
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  $('scrub').value = video.currentTime;
-  $('time').textContent = `${video.currentTime.toFixed(2)} / ${video.duration.toFixed(2)} s`;
-  if (!clip || video.currentTime < clip.start || video.currentTime >= clip.end) return;
-  const t = video.currentTime - clip.start, edge = Math.min(canvas.width, canvas.height);
+function drawText(t) {
+  if (!clip || t < 0 || t >= clip.end - clip.start) return;
+  const edge = Math.min(canvas.width, canvas.height);
   if (clip.title && t < 4) overlay(clip.title, canvas.height * .16, Math.max(12, Math.round(edge * .07)));
   const cue = clip.cues.find(cue => cue.from <= t && t < cue.to);
   if (cue) overlay(cue.text, canvas.height * .83, Math.max(11, Math.round(edge * .055)));
+}
+function draw() {
+  if (active?.exporting || !ready || video.readyState < 2) return;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  $('scrub').value = video.currentTime;
+  $('time').textContent = `${video.currentTime.toFixed(2)} / ${video.duration.toFixed(2)} s`;
+  if (clip) drawText(video.currentTime - clip.start);
 }
 function discardSource() {
   ready = false;
@@ -148,96 +149,107 @@ function release(job) {
   clearTimeout(job.watchdog);
   cancelAnimationFrame(job.frame);
   video.pause();
-  if (job.audioOut) audioSource.disconnect(job.audioOut);
-  for (const track of [...(job.picture?.getTracks() ?? []), ...(job.audioOut?.stream.getTracks() ?? [])]) track.stop();
   active = null;
   controls();
-  if (job.complete && job.exporting && job.bytes) {
-    const type = job.rec.mimeType || mime, ext = type.startsWith('video/mp4') ? 'mp4' : 'webm';
-    resultUrl = URL.createObjectURL(new Blob(job.chunks, { type }));
-    $('download').href = resultUrl;
-    $('download').download = `clip.${ext}`;
-    $('download').textContent = `Save ${ext.toUpperCase()} clip`;
-    $('download').hidden = false;
-    message('Export ready. Save the clip to keep it.');
-  } else if (job.complete && !job.exporting) {
-    message('Preview complete.');
-  } else {
-    message(job.failure || 'Export did not finish. No partial file was offered.', true);
-  }
 }
-function finish(job, complete, failure) {
-  if (active !== job || job.ending) return;
-  job.ending = true;
-  job.complete = complete;
-  job.failure = failure;
-  cancelAnimationFrame(job.frame);
-  clearTimeout(job.watchdog);
-  video.pause();
-  if (job.rec?.state === 'recording') job.rec.stop();
-  else release(job);
+function stop(reason) {
+  const job = active;
+  if (!job || job.reason) return;
+  job.reason = reason;
+  if (job.exporting) {
+    if (job.conversion) job.conversion.cancel().catch(() => message('The encoder failed to cancel cleanly. Reload the tab.', true));
+  } else release(job);
+  message(reason, true);
 }
-function frame(job) {
-  if (active !== job || job.ending) return;
-  if (video.currentTime >= clip.end || video.ended) return finish(job, true);
-  draw();
-  job.frame = requestAnimationFrame(() => frame(job));
-}
-async function play(exporting) {
-  if (!clip || active || (exporting && !canExport)) return;
-  const job = active = { exporting, chunks: [], bytes: 0 };
+function begin(exporting, limit) {
+  const job = active = { exporting };
   controls();
-  if (exporting) clearResult();
-  message(exporting ? 'Exporting on this device. Keep the tab visible…' : 'Playing your cut…');
-  job.watchdog = setTimeout(() => finish(job, false, 'Playback took too long. Try a shorter cut or a different browser.'),
-    (clip.end - clip.start + 8) * 1000);
-  try {
-    if (exporting && !audio) {
-      audio = new Audio();
-      audioSource = audio.createMediaElementSource(video);
-      audioSource.connect(audio.destination);
-    }
-    video.currentTime = clip.start;
-    await Promise.all([video.play(), audio?.resume()]);
-    if (active !== job || job.ending) return;
-    draw();
-    if (exporting) {
-      job.picture = canvas.captureStream(30);
-      job.audioOut = audio.createMediaStreamDestination();
-      audioSource.connect(job.audioOut);
-      const stream = new MediaStream([...job.picture.getVideoTracks(), ...job.audioOut.stream.getAudioTracks()]);
-      job.rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 128000 });
-      job.rec.ondataavailable = ({ data }) => {
-        job.bytes += data.size;
-        if (job.bytes > maxExport) {
-          job.complete = false;
-          job.failure = 'Export exceeded 32 MiB. Try a shorter cut.';
-          finish(job, false, job.failure);
-        } else if (data.size) job.chunks.push(data);
-      };
-      job.rec.onstop = () => release(job);
-      job.rec.onerror = () => finish(job, false, 'This browser could not encode the clip. Try a shorter cut or another browser.');
-      job.rec.start(250);
-    }
-    job.started = true;
-    frame(job);
-  } catch {
-    finish(job, false, exporting
-      ? 'Export could not start with this video and browser. Try an H.264 MP4 in current Safari or Chrome.'
-      : 'Playback could not start. Tap Preview again or choose a supported video.');
-  }
+  canvas.scrollIntoView({ block: 'center' });
+  job.watchdog = setTimeout(() => stop('Operation took too long. Try a shorter cut or a different browser.'), limit);
+  return job;
 }
-$('preview').onclick = () => play(false);
-$('export').onclick = () => play(true);
-$('cancel').onclick = () => { if (active) finish(active, false, 'Stopped. Your edit is still here.'); };
-video.onended = () => { if (active) finish(active, !!active.started); };
+$('preview').onclick = async () => {
+  if (!clip || active) return;
+  const job = begin(false, (clip.end - clip.start + 8) * 1000);
+  message('Playing your cut…');
+  try {
+    video.currentTime = clip.start;
+    await video.play();
+    function frame() {
+      if (active !== job) return;
+      if (video.currentTime >= clip.end || video.ended) {
+        release(job);
+        return message('Preview complete.');
+      }
+      draw();
+      job.frame = requestAnimationFrame(frame);
+    }
+    frame();
+  } catch { if (active === job) stop('Playback could not start. Tap Preview again or choose a supported video.'); }
+};
+$('export').onclick = async () => {
+  if (!clip || active || !canExport) return;
+  const job = begin(true, 180000);
+  clearResult();
+  message('Exporting on this device. Keep the tab visible…');
+  let input;
+  try {
+    const m = await import('/mediabunny.js');
+    input = new m.Input({ formats: [m.MP4, m.QTFF, m.WEBM], source: new m.BlobSource($('file').files[0]) });
+    const audio = await input.getPrimaryAudioTrack();
+    const videoConfig = { width: canvas.width, height: canvas.height, frameRate: 30, quality: new m.Quality({ bitrate: 2500000 }) };
+    const sound = { numberOfChannels: audio ? Math.min(2, await audio.getNumberOfChannels()) : 1,
+      sampleRate: 48000, quality: new m.Quality({ bitrate: 128000 }) };
+    for (const [ext, vCodec, aCodec, Format] of [
+      ['mp4', 'avc', 'aac', m.Mp4OutputFormat], ['webm', 'vp8', 'opus', m.WebMOutputFormat],
+    ]) {
+      if (job.reason) return;
+      if (!await m.canEncodeVideo(vCodec, videoConfig) || (audio && !await m.canEncodeAudio(aCodec, sound))) continue;
+      const target = new m.BufferTarget();
+      const output = new m.Output({ format: new Format(), target });
+      const conversion = await m.Conversion.init({
+        input, output, tracks: 'primary', tags: {}, copy: false, trim: { start: clip.start, end: clip.end },
+        video: { ...videoConfig, codec: vCodec, fit: 'contain', allowTransformationMetadata: false,
+          process(sample) {
+            sample.draw(ctx, 0, 0, canvas.width, canvas.height);
+            drawText(sample.timestamp);
+            return canvas;
+          } },
+        audio: { ...sound, codec: aCodec },
+      });
+      if (job.reason) return;
+      if (!conversion.isValid || conversion.discardedTracks.length) continue;
+      job.conversion = conversion;
+      conversion.onProgress = p => { $('progress').textContent = `Exporting · ${Math.round(p * 100)}%`; };
+      target.on('write', ({ end }) => { if (end > maxExport) stop('Export exceeded 32 MiB. Try a shorter cut.'); });
+      await conversion.execute();
+      if (job.reason) return;
+      if (!target.buffer?.byteLength || target.buffer.byteLength > maxExport) return message('No bounded output file was produced. Try a shorter cut.', true);
+      resultUrl = URL.createObjectURL(new Blob([target.buffer], { type: `video/${ext}` }));
+      $('download').href = resultUrl;
+      $('download').download = `clip.${ext}`;
+      $('download').textContent = `Save ${ext.toUpperCase()} clip`;
+      $('download').hidden = false;
+      message('Export ready. Save the clip to keep it.');
+      $('download').scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    message('This browser cannot encode this video and its audio. Try an H.264 MP4 in current Chrome, Edge or Safari.', true);
+  } catch {
+    message(job.reason || 'The browser could not decode or export this cut. Try an H.264 MP4 or a different browser.', true);
+  } finally {
+    input?.dispose();
+    release(job);
+  }
+};
+$('cancel').onclick = () => stop('Stopped. Your edit is still here.');
 video.onerror = () => {
   if (!sourceUrl || !video.error) return;
-  if (active) finish(active, false, 'The browser could not decode this video.');
+  stop('The browser could not decode this video.');
   discardSource();
   message('This browser cannot decode the video or its codec. Try an H.264 MP4.', true);
 };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && active) finish(active, false, 'Playback stopped when the tab was hidden. Keep it visible during export.');
+  if (document.hidden) stop('Stopped when the tab was hidden. Keep it visible during export.');
 });
-if (!canExport) $('compat').textContent = 'Preview only in this browser: export needs canvas recording, MediaRecorder, Web Audio and a supported encoder. Try a current Chrome, Edge or Safari.';
+if (!canExport) $('compat').textContent = 'Preview only in this browser: export needs WebCodecs video decoding and encoding. Try current Chrome, Edge or Safari.';

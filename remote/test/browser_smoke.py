@@ -22,10 +22,10 @@ def verify_export(path):
     info = json.loads(command(PROBE, "-v", "error", "-show_format", "-show_streams", "-of", "json", path))
     assert {s["codec_type"] for s in info["streams"]} == {"video", "audio"}
     if "duration" in info["format"]:
-        assert 1.65 < float(info["format"]["duration"]) < 2.45, info["format"]["duration"]
+        assert 1.90 < float(info["format"]["duration"]) < 2.10, info["format"]["duration"]
     # Streaming containers sometimes omit duration; verify the decoded audio length and actual signal.
     pcm = array.array("h", command(FF, "-v", "error", "-i", path, "-vn", "-f", "s16le", "-ac", "1", "-ar", "8000", "-"))
-    assert 1.65 < len(pcm) / 8000 < 2.45 and max(pcm) > 500, len(pcm) / 8000
+    assert 1.90 < len(pcm) / 8000 < 2.10 and max(pcm) > 500, len(pcm) / 8000
     expected_title, expected_caption = [], []
     for timestamp in ["0.45", "1.45"]:
         pixels = command(FF, "-v", "error", "-ss", timestamp,
@@ -81,13 +81,18 @@ def run():
             save.value.save_as(exported)
             print(verify_export(exported))
             second = browser.new_context(**pw.devices["Pixel 7"])
+            second.add_init_script("Object.defineProperty(window, 'VideoEncoder', { value: undefined })")
             other = second.new_page()
             other.goto(base)
             expect(other.locator("#status")).to_have_text("No video selected.")
             assert not other.locator("#captions").input_value()
+            expect(other.locator("#compat")).to_contain_text("Preview only")
+            other.locator("#file").set_input_files(source)
+            expect(other.locator("#preview")).to_be_enabled()
+            expect(other.locator("#export")).to_be_disabled()
             assert not errors, errors
             assert all(url.startswith("blob:") or (verb == "GET" and url in {
-                base + "/", base + "/editor.css", base + "/editor.js"}) for verb, url in requests), requests
+                base + "/", base + "/editor.css", base + "/editor.js", base + "/mediabunny.js"}) for verb, url in requests), requests
             print("Phone viewport; file selection, invalid cut, preview, export, isolated second visit and no media uploads: OK")
             browser.close()
         finally:

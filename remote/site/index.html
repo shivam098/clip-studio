@@ -25,6 +25,7 @@
           <canvas id="frame" width="640" height="360" aria-label="Edited video preview"></canvas>
           <span id="empty">Your clip preview appears here</span>
         </div>
+        <div id="transport" hidden><span id="progress"></span><button id="cancel">Stop</button></div>
         <fieldset id="timeline" disabled>
           <label for="scrub">Playhead <output id="time">0.00 / 0.00 s</output></label>
           <input id="scrub" type="range" min="0" max="1" step=".01" value="0">
@@ -48,14 +49,15 @@
         <p id="validation" aria-live="polite"></p>
         <div class="row actions">
           <button id="preview" disabled>Preview cut</button><button id="export" class="primary" disabled>Export clip</button>
-          <button id="cancel" hidden>Stop</button>
         </div>
-        <p id="compat" class="hint">Export runs in real time. Keep this tab visible and your screen awake.</p>
+        <p id="compat" class="hint">Export uses this device’s video encoder. Keep the tab visible until the file is ready.</p>
         <p id="status" role="status">No video selected.</p>
         <a id="download" class="save" hidden>Save exported clip</a>
       </section>
     </div>
-    <footer><strong>Browser workspace only.</strong> Media and edits stay in this tab and disappear on reload. Save any export before leaving. The desktop library, URL imports, transcription and publishing are not connected.</footer>
+    <footer><strong>Browser workspace only.</strong> Media and edits stay in this tab and disappear on reload. Save any export before leaving. The desktop library, URL imports, transcription and publishing are not connected.
+      <p>Media tools: Mediabunny 1.65.2 (<a href="/mediabunny-license.txt">MPL-2.0</a>; <a href="https://registry.npmjs.org/mediabunny/-/mediabunny-1.65.2.tgz" rel="external noreferrer">corresponding source</a>).</p>
+    </footer>
   </main>
 </body>
 </html>

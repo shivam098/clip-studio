@@ -10,6 +10,8 @@ const files = [
   ['/', 'index.html', 'text/html'],
   ['/editor.css', 'editor.css', 'text/css'],
   ['/editor.js', 'editor.js', 'text/javascript'],
+  ['/mediabunny.js', 'mediabunny.js', 'text/javascript'],
+  ['/mediabunny-license.txt', 'mediabunny-license.txt', 'text/plain'],
 ];
 
 export function createEditor(pinFile = new URL('./state/pin.json', import.meta.url)) {

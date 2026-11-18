@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:LOCALAPPDATA 'ClipStudioRemote'
 if (Test-Path -LiteralPath $root) { throw 'ClipStudioRemote already exists. Do not overwrite a running installation.' }
 $files = 'server.mjs','Start-Editor.ps1','Stop-Editor.ps1','operator.mjs','quick.yml','README.md',
-         'pages/link-policy.js','site/index.html','site/editor.css','site/editor.js'
+         'pages/link-policy.js','site/index.html','site/editor.css','site/editor.js','site/mediabunny.js','site/mediabunny-license.txt'
 $repo = Split-Path $PSScriptRoot -Parent
 $archive = Join-Path ([System.IO.Path]::GetTempPath()) ("clip-editor-" + [guid]::NewGuid() + ".zip")
 try {

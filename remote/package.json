@@ -1,0 +1,8 @@
+{
+  "name": "clip-studio-browser-editor",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mediabunny": "1.65.2"
+  }
+}

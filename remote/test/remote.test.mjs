@@ -60,6 +60,7 @@ test('isolated read-only origin serves only static resources and the current exa
     req.on('error', reject); req.end();
   });
   for (const path of ['/', '/editor.css', '/editor.js']) assert.equal((await request(path)).status, 200);
+  for (const path of ['/mediabunny.js', '/mediabunny-license.txt']) assert.equal((await request(path, 'HEAD')).status, 200);
   const health = await request('/health');
   assert.deepEqual(JSON.parse(health.body), signature);
   assert.match(health.headers['content-security-policy'], /connect-src 'none'/);
