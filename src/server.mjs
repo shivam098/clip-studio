@@ -17,9 +17,12 @@ import { Vault } from './vault.mjs';
 import { Providers } from './providers.mjs';
 import { Publishing } from './publishing.mjs';
 import { Live } from './live.mjs';
+import { OwnerAccess } from './remote-auth.mjs';
+import { Tunnel } from './tunnel.mjs';
+import { Uploads, maxVideo } from './uploads.mjs';
 
 const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const limit = 2 * 1024 ** 3;
+const limit = maxVideo;
 const publicAsset = ({ path, ...asset }) => asset;
 const publicClip = ({ output, ...clip }) => ({ ...clip, rendered: !!output, captions: parse(clip.captions) });
 function publicJob({ payload, result, ...job }) {
@@ -123,6 +126,9 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     return { id: assetId, ...info };
   }
   const live = new Live(store, leases, root, config, addAsset);
+  const uploads = new Uploads(root, addAsset);
+  await uploads.init();
+  const access = new OwnerAccess(store);
   // Binding must succeed before startup recovery; another server must never reset live ownership.
   let ticking = false;
   const tasks = new Set();
@@ -143,19 +149,40 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
   }
   const requests = new Set();
   let stopping = false;
-  const handle = async (req, res) => {
+  const handle = async (req, res, remote) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       if (stopping) return send(res, 503, { error: 'Server is stopping' });
-      const actualPort = server.address()?.port ?? port;
-      const allowedHosts = [`127.0.0.1:${actualPort}`, `localhost:${actualPort}`];
-      if (!allowedHosts.includes(req.headers.host)) return send(res, 403, { error: 'Localhost host required' });
-      if (req.headers.origin && !allowedHosts.map(h => `http://${h}`).includes(req.headers.origin)) return send(res, 403, { error: 'Cross-origin access denied' });
+      let token = csrf;
+      if (remote) {
+        const session = await access.gate(req, res, remote.binding, remote.active);
+        if (!session) return;
+        token = session.csrf;
+      } else {
+        const actualPort = server.address()?.port ?? port;
+        const allowedHosts = [`127.0.0.1:${actualPort}`, `localhost:${actualPort}`];
+        if (!allowedHosts.includes(req.headers.host) || ['cf-ray','cf-connecting-ip','forwarded','x-forwarded-host','x-forwarded-proto','x-forwarded-for'].some(k => k in req.headers)) {
+          return send(res, 403, { error: 'Direct localhost connection required' });
+        }
+        if (req.headers.origin && !allowedHosts.map(h => `http://${h}`).includes(req.headers.origin)) return send(res, 403, { error: 'Cross-origin access denied' });
+      }
       const url = new URL(req.url, `http://${req.headers.host}`);
       const parts = url.pathname.split('/').filter(Boolean);
-      if (!['GET', 'HEAD'].includes(req.method) && req.headers['x-studio-token'] !== csrf) return send(res, 403, { error: 'Missing local session token; reload the page' });
+      if (!['GET', 'HEAD'].includes(req.method) && req.headers['x-studio-token'] !== token) return send(res, 403, { error: 'Missing session token; reload the page' });
+      if (!remote && url.pathname === '/api/remote/control') {
+        if (req.method === 'GET') return send(res, 200, { service: 'clip-studio-full-control-v1', token, ...access.status(), ...tunnel.status() });
+        if (req.method === 'POST') {
+          const input = await body(req);
+          if (!['start','stop'].includes(input.action)) throw new Error('Use start or stop.');
+          return send(res, 200, await tunnel.change(input.action));
+        }
+      }
+      if (!remote && req.method === 'POST' && url.pathname === '/api/remote/password') {
+        const input = await body(req);
+        return send(res, 200, await access.set(input.password, input.revision));
+      }
       if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true, name: 'Clip Studio', version: '0.1.0' });
       if (req.method === 'POST' && url.pathname === '/api/shutdown') {
         const input = await body(req);
@@ -166,7 +193,8 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
       }
       if (req.method === 'GET' && url.pathname === '/api/state') {
         return send(res, 200, {
-          token: csrf, workspaces: store.all('SELECT * FROM workspaces ORDER BY created'),
+          token, access: remote ? { remote: true } : { remote: false, ...access.status() },
+          workspaces: store.all('SELECT * FROM workspaces ORDER BY created'),
           assets: store.all('SELECT * FROM assets ORDER BY created DESC').map(publicAsset),
           clips: store.all('SELECT * FROM clips ORDER BY created DESC').map(publicClip),
           jobs: store.all('SELECT id,type,resource_id,state,error,created,started,finished,result,payload FROM jobs ORDER BY created DESC LIMIT 100').map(publicJob),
@@ -208,6 +236,22 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
         getAsset(parts[2]);
         const transcript = store.get('SELECT * FROM transcripts WHERE asset_id=?', parts[2]);
         return send(res, 200, transcript ? { source: transcript.source, segments: parse(transcript.segments) } : { source: 'Not transcribed', segments: [] });
+      }
+      if (url.pathname === '/api/uploads' && req.method === 'POST') {
+        const input = await body(req), workspace = getWorkspace(input.workspace), name = text(input.name, 'Filename', 255);
+        if (input.recovery && getRecoveryJob(input.recovery).resource_id !== workspace) throw new Error('Choose a file for the original import workspace');
+        return send(res, 201, await uploads.begin(token, { workspace, name, size: input.size, recovery: input.recovery || null }));
+      }
+      if (parts[0] === 'api' && parts[1] === 'uploads' && parts.length === 4) {
+        const uploadId = parts[2], action = parts[3];
+        if (req.method === 'POST' && action === 'piece') {
+          const offset = url.searchParams.get('offset');
+          if (!/^(0|[1-9]\d*)$/.test(offset ?? '')) throw new Error('Expected the acknowledged byte offset.');
+          return send(res, 200, await uploads.append(uploadId, token, req, Number(offset)));
+        }
+        if (req.method === 'POST' && action === 'finish') return send(res, 201, await uploads.finish(uploadId, token));
+        if (req.method === 'POST' && action === 'cancel') { await uploads.cancel(uploadId, token); return send(res, 200, { cancelled: true }); }
+        if (req.method === 'GET' && action === 'status') return send(res, 200, { offset: uploads.get(uploadId, token).offset });
       }
       if (req.method === 'POST' && url.pathname === '/api/upload') {
         const workspaceId = getWorkspace(url.searchParams.get('workspace'));
@@ -441,7 +485,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
       }
       if (req.method === 'GET' && ['/', '/app.js', '/style.css'].includes(url.pathname)) {
         const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-        res.writeHead(200, { 'Content-Type': file.endsWith('.html') ? 'text/html; charset=utf-8' : file.endsWith('.css') ? 'text/css' : 'text/javascript', 'Cache-Control': 'no-cache' });
+        res.writeHead(200, { 'Content-Type': file.endsWith('.html') ? 'text/html; charset=utf-8' : file.endsWith('.css') ? 'text/css' : 'text/javascript', 'Cache-Control': remote ? 'private, no-store' : 'no-cache' });
         return res.end(await readFile(join(sourceRoot, 'public', file)));
       }
       send(res, 404, { error: 'Not found' });
@@ -450,11 +494,13 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
       else if (!res.destroyed) res.destroy();
     }
   };
-  const server = http.createServer((req, res) => {
-    const request = handle(req, res);
+  const dispatch = (req, res, remote) => {
+    const request = handle(req, res, remote);
     requests.add(request);
     request.finally(() => requests.delete(request)).catch(error => console.error(`Request failed: ${error.message}`));
-  });
+  };
+  const tunnel = new Tunnel(root, dispatch, () => access.revoke());
+  const server = http.createServer((req, res) => dispatch(req, res, null));
   server.requestTimeout = 30 * 60_000;
   try {
     await new Promise((resolve, reject) => {
@@ -462,6 +508,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     });
   } catch (error) { store.close(); await unlink(lockPath); throw error; }
   store.recover();
+  const pruneTimer = setInterval(() => track(uploads.prune()), 60000);
   const timer = setInterval(() => {
     if (ticking) return;
     ticking = true;
@@ -474,13 +521,15 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
   }
   async function shutdown() {
     stopping = true;
-    clearInterval(timer);
+    clearInterval(timer); clearInterval(pruneTimer);
+    await tunnel.change('stop');
     const closed = new Promise(resolve => server.close(resolve));
     server.closeAllConnections();
     await Promise.allSettled([...requests]);
     publishing.shutdown();
     await live.shutdown(); await jobs.shutdown();
     await Promise.allSettled([...tasks]);
+    await uploads.prune(true);
     await closed;
     store.close();
     await unlink(lockPath);

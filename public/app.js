@@ -14,6 +14,9 @@ function notify(message, error = false) {
 async function api(path, data, method = 'POST') {
   const response = await fetch(path, { method, headers: { 'Content-Type': 'application/json', 'X-Studio-Token': state?.token ?? '' },
     ...(method === 'GET' ? {} : { body: JSON.stringify(data ?? {}) }) });
+  if (response.status === 401 && state?.access?.remote) {
+    location.replace('/'); throw new Error('Your sign-in expired.');
+  }
   const result = await response.json();
   if (!response.ok) throw new Error(result.error ?? `Request failed (${response.status})`);
   return result;
@@ -87,6 +90,10 @@ function privacyOptions() {
   setMarkup('#publish-privacy', '<option value="">Select visibility</option>' + options.map(option => `<option>${option}</option>`).join(''));
 }
 function draw() {
+  $('#owner-form').classList.toggle('hidden', state.access.remote);
+  $('#remote-session').classList.toggle('hidden', !state.access.remote);
+  $('#owner-status').textContent = state.access.configured ? 'An owner password is set. Changing it signs out every remote device.' : 'No owner password is set. Remote access is locked.';
+  $('#owner-clear').disabled = !state.access.configured;
   selectOptions('#workspace', state.workspaces, w => w.name);
   $('#workspace').value = workspaceId;
   const recoveries = state.jobs.filter(job => job.resource_id === workspaceId && job.recovery);
@@ -139,7 +146,7 @@ async function refresh() {
       if (!editingClip && !$('#clip-captions').value) $('#clip-captions').value = captionText(transcript.segments);
       transcriptSignature = transcriptStamp();
     }
-    $('#connection').textContent = 'Local server connected';
+    $('#connection').textContent = state.access.remote ? 'Studio PC connected' : 'Local server connected';
   } catch (error) { $('#connection').textContent = 'Disconnected'; notify(error.message, true); }
   finally { refreshBusy = false; }
 }
@@ -155,13 +162,32 @@ action('#workspace-form', async () => {
 }, 'submit');
 async function uploadFile(file, destination, recoveryId) {
   if (!file) throw new Error('Choose a video');
-  notify('Uploading to local storage…');
+  notify('Uploading to your studio…');
   const params = new URLSearchParams({ workspace: destination, name: file.name });
   if (recoveryId) params.set('recovery', recoveryId);
-  const response = await fetch(`/api/upload?${params}`,
-    { method: 'POST', headers: { 'X-Studio-Token': state.token, 'Content-Type': 'application/octet-stream' }, body: file });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error);
+  const headers = { 'X-Studio-Token': state.token, 'Content-Type': 'application/octet-stream' };
+  let result;
+  if (state.access.remote && file.size > 8 * 1024 ** 2) {
+    const upload = await api('/api/uploads', { workspace: destination, name: file.name, size: file.size, recovery: recoveryId });
+    const url = `/api/uploads/${upload.id}`;
+    try {
+      for (let offset = 0; offset < file.size;) {
+        const end = Math.min(file.size, offset + upload.chunkSize);
+        const response = await fetch(`${url}/piece?offset=${offset}`, { method: 'POST', headers, body: file.slice(offset,end) });
+        const ack = await response.json();
+        if (!response.ok || ack.offset !== end) throw new Error(ack.error ?? 'Upload piece was not acknowledged.');
+        offset = end; notify(`Uploading to your studio: ${Math.floor(100 * end / file.size)}%`);
+      }
+      result = await api(`${url}/finish`);
+    } catch (error) {
+      try { await api(`${url}/cancel`); } catch { /* Already finalized, or unreachable; partials expire. */ }
+      throw error;
+    }
+  } else {
+    const response = await fetch(`/api/upload?${params}`, { method: 'POST', headers, body: file });
+    result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+  }
   await refresh();
   if (workspaceId === destination && state.assets.some(asset => asset.id === result.id)) await selectAsset(result.id);
   notify(`Video added to ${state.workspaces.find(w => w.id === destination)?.name ?? 'the original workspace'}.`);
@@ -220,6 +246,17 @@ action('#ai-form', async () => {
   $('#ai-token').value = ''; notify('Model configuration saved. No transcript was sent.');
 }, 'submit');
 action('#diagnostics', async () => { $('#diagnostic-result').textContent = JSON.stringify(await api('/api/diagnostics', null, 'GET'), null, 2); });
+action('#owner-form', async () => {
+  const password = $('#owner-password').value;
+  if (password !== $('#owner-confirm').value) throw new Error('Passwords do not match.');
+  await api('/api/remote/password', { password, revision: state.access.revision });
+  $('#owner-form').reset(); notify('Owner password saved. Use the Pages bookmark to sign in on another device.');
+}, 'submit');
+action('#owner-clear', async () => {
+  if (!confirm('Lock remote access and sign out all devices?')) return;
+  await api('/api/remote/password', { password: null, revision: state.access.revision }); $('#owner-form').reset(); notify('Remote access locked.');
+});
+action('#remote-logout', async () => { await api('/auth/logout'); location.replace('/'); });
 document.addEventListener('click', async event => {
   const button = event.target.closest('button');
   if (!button) return;

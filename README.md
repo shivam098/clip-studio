@@ -2,7 +2,25 @@
 
 An independently written, local-first clipping application. Bring a video into a browser workspace, transcribe it offline, find review windows, edit captions, and render downloadable vertical clips. No reference-project code, assets, prompts, tests, or documentation were used. This is not a formal clean-room certification.
 
-**Trial URL:** `http://localhost:4318`. The server binds to `127.0.0.1` only. It is not a multi-user service and must not be exposed through a tunnel or reverse proxy.
+**On the studio PC:** `http://localhost:4318`. **On other devices:** [open the full studio](https://shivam098.github.io/clip-studio/). Both use the same application, library, SQLite jobs, live sessions, AI settings and publishing queue on the PC. The remote connection is optional and intended for one trusted owner, not for guests. Never point a tunnel or reverse proxy at port 4318.
+
+### Set up access from another device
+
+1. On the PC, open **localhost:4318 → Privacy & setup → Remote access**. Enter and confirm a unique password (at least 12 characters) and click **Set owner password**. There is no remote signup or first-visitor claim. Setting, changing or clearing the password is possible only from the local console.
+2. With the PC awake, run the `start` command below. Open **https://shivam098.github.io/clip-studio/** on the other device. The launcher checks the current tunnel and forwards to its exact HTTPS address. Enter your **studio** password there, not a Google or GitHub password. If no password has been set, the address shows a locked page; no one can open the library.
+3. Use the same Studio, Live capture, Publishing and Privacy & setup tabs. Files you upload from another device are stored **on the PC**, not just in that browser. Remote sign-out, password rotation, server restart or tunnel rotation revokes the relevant sessions.
+
+```powershell
+node "$env:LOCALAPPDATA\ClipStudio\app\scripts\remote.mjs" start
+node "$env:LOCALAPPDATA\ClipStudio\app\scripts\remote.mjs" status
+node "$env:LOCALAPPDATA\ClipStudio\app\scripts\remote.mjs" stop
+```
+
+Remote operation requires `cloudflared` and `gh` on PATH. `start` starts the installed desktop server if needed, adopts its existing full-app tunnel or creates one, verifies the full-studio beacon and anonymous API denial, then publishes/renews the `gh-pages/link.json` pointer. Only the stored **shivam098** GitHub CLI credential is used; inherited token/host overrides are ignored. It does not create accounts, schedule tasks or configure other repositories. Repeat `start` at least hourly to keep a six-hour pointer fresh; a matching lease is not rewritten until its final hour. `status` reports the owner-verified pointer and local tunnel state; `stop` first revokes the listener/sessions, then marks the launcher offline, without stopping localhost. A failed GitHub update cannot keep the origin accessible after `stop`. Pages deployment/cache updates take time. If the lease expires, the laptop sleeps, or the tunnel is lost, the launcher does not redirect to an unverified destination.
+
+**Trust boundary.** The app owns `cloudflared` and its separate loopback listener. Only that listener accepts the exact issued public Host, and only while its tunnel child and binding are live. All application routes, static assets and media ranges require an owner session on this listener. Sign-in requires the exact HTTPS Origin, is rate-limited per client and globally, and issues a random `HttpOnly; Secure; SameSite=Strict` host-only cookie. Writes also require a per-session CSRF token. Passwords are stored only as salted scrypt hashes. The local console token is never shared remotely. Only the non-sensitive availability beacon permits the exact Pages origin to read it; the private app has no CORS grant. Password setup and tunnel/process control are machine administration, not remote sign-in capabilities. Keep the PC, browser, local data directory and backups trusted.
+
+Cloudflare terminates HTTPS and transports the remote browser traffic: that includes sign-in, video bytes, transcripts, downloads and any provider credentials you enter remotely. GitHub Pages receives **no** passwords, library data or media. Publishing/model integrations retain the same explicit approvals as localhost. [Cloudflare documents a 100 MB per-request limit on Free/Pro](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/4xx-client-error/error-413/); remote uploads above 8 MiB use bounded sequential pieces for the same 2 GiB total-file limit. Only complete, probed media appears in the library. Lost sessions/abandoned partials expire; an interrupted browser upload can be started again. Quick Tunnels are a trial service, not an uptime guarantee.
 
 ## What works, and what is not verified
 
