@@ -21,6 +21,7 @@ import { StudioAccess } from './remote-auth.mjs';
 import { auditRequest, isResourceId } from './activity.mjs';
 import { Tunnel } from './tunnel.mjs';
 import { Uploads, maxVideo } from './uploads.mjs';
+import { YouTubeSignin } from './youtube-signin.mjs';
 
 const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const limit = maxVideo;
@@ -29,7 +30,7 @@ const publicClip = ({ output, ...clip }) => ({ ...clip, rendered: !!output, capt
 function publicJob({ payload, result, ...job }) {
   const output = ['import', 'demo', 'analyze'].includes(job.type) ? parse(result) : null;
   const recovery = importRecovery(job, output);
-  return { ...job, error: recovery ? 'YouTube requires verification to import this video.' : job.error,
+  return { ...job, error: recovery ? (recovery.signedIn ? 'YouTube did not accept the saved YouTube sign-in.' : 'YouTube asked for a YouTube sign-in to import this video.') : job.error,
     result: job.state === 'succeeded' ? output : null, recovery: recovery && !parse(payload)?.recoveryDismissed ? recovery : null };
 }
 const text = (value, label, max = 160) => {
@@ -133,7 +134,9 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     });
     return { id: assetId, ...info };
   }
-  const live = new Live(store, leases, root, config, addAsset);
+  const signin = new YouTubeSignin(root, vault, store);
+  await signin.init();
+  const live = new Live(store, leases, root, config, addAsset, (url, operation) => signin.use(url, operation));
   const uploads = new Uploads(root, addAsset);
   await uploads.init();
   const access = new StudioAccess(store);
@@ -219,6 +222,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
               provider_ref: { phase: ref.phase, id: ref.videoId ?? ref.mediaId ?? ref.containerId ?? ref.publishId, hasSession: !!ref.session } }; }),
           settings: { publishingEnabled: store.setting('publishingEnabled', false),
             ai, aiCredential: !!ai && vault.has(modelCredentialKey(ai.endpoint)), model: config.model,
+            youtubeSignin: signin.status(),
             storage: root, secrets: process.platform === 'win32' ? 'Windows DPAPI, current user' : 'Owner-readable credential file' },
         });
       }
@@ -307,11 +311,12 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
             const audio = process.platform === 'win32' ? ['-i', speech] : ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '12'];
             await run(config.ffmpeg, ['-hide_banner', '-nostdin', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=960x540:rate=30',
               ...audio, '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '2', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path], { signal: ctx.signal });
-          } else path = await importVideo(input.url, folder, config, ctx.signal);
+          } else path = await signin.use(input.url, cookieFile =>
+            importVideo(input.url, folder, cookieFile ? { ...config, cookieFile } : config, ctx.signal));
           const info = await probe(path, config, ctx.signal);
           return { id: id(), path, workspaceId, name: isDemo ? 'Studio demo (synthetic)' : 'Imported video', ...info };
         }, { timeout: 30 * 60_000, failureResult: error => error instanceof YouTubeVerificationRequired
-          ? { reason: 'youtube-verification', videoId: error.videoId } : { reason: 'other' }, commit: asset => {
+          ? { reason: 'youtube-verification', videoId: error.videoId, ...(error.signedIn ? { signedIn: true } : {}) } : { reason: 'other' }, commit: asset => {
           store.run('INSERT INTO assets VALUES (?,?,?,?,?,?,?,?,?)', asset.id, asset.workspaceId, asset.name, asset.path,
             asset.duration, asset.width, asset.height, asset.audio, now());
           // Paths are retained only in assets, not in the publicly returned job result.
@@ -416,6 +421,13 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
           store.setSetting('ai', { endpoint: endpoint.url, model, enabled: ai.enabled === true });
         }
         return send(res, 200, { saved: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/youtube-signin') {
+        const input = await body(req);
+        return send(res, 200, await signin.save(input.cookies));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/youtube-signin/remove') {
+        return send(res, 200, await signin.remove());
       }
       if (req.method === 'POST' && url.pathname === '/api/accounts') {
         const input = await body(req);

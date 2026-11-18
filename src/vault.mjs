@@ -17,6 +17,12 @@ export class Vault {
     delete entries[from];
     writeJsonAtomic(this.file, entries);
   }
+  remove(key) {
+    const entries = this.entries();
+    if (!entries[key]) return;
+    delete entries[key];
+    writeJsonAtomic(this.file, entries);
+  }
   async put(key, secret) {
     let value = secret;
     if (process.platform === 'win32') {

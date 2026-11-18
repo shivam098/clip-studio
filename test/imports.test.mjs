@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readFile, access, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { download, liveUrl, importRecovery, YouTubeVerificationRequired } from '../src/imports.mjs';
+import { YouTubeSignin, youtubeCookies, signinKey } from '../src/youtube-signin.mjs';
 import { createApp } from '../src/server.mjs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -39,12 +40,12 @@ test('live URL lookup uses the same explicit runtime configuration', async () =>
   assert.equal(result, 'https://cdn.example.test/synthetic.m3u8');
 });
 
-test('YouTube sign-in refusal stops after one call and explains the supported local-file path', async () => {
+test('YouTube sign-in refusal stops after one call and points to adding a YouTube sign-in', async () => {
   for (const quote of ["'", '\u2019', '\uFFFD']) {
     let calls = 0;
     await assert.rejects(download(source, 'unused', config, undefined, async () => {
       calls++; throw new Error(`ERROR: Sign in to confirm you${quote}re not a bot. Use --cookies-from-browser`);
-    }), /No browser cookies were read and no automatic retry was made.*Use Upload/);
+    }), error => error instanceof YouTubeVerificationRequired && !error.signedIn && /Add a YouTube sign-in \(cookies file\) in Privacy & setup/.test(error.message));
     assert.equal(calls, 1);
   }
 });
@@ -115,5 +116,118 @@ test('a failed import offers recovery only for its workspace, survives reload an
     const dismissed = (await state()).jobs[0];
     assert.equal(dismissed.state, 'failed'); assert.equal(dismissed.recovery, null); assert.equal(calls, 1);
     assert.equal((await post(`/api/upload?workspace=${original}&recovery=${jobId}&name=test.mp4`)).status, 400);
+  } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+const cookieLine = (domain, name, value) => [domain, 'TRUE', '/', 'TRUE', '1900000000', name, value].join('\t');
+const exported = ['# Netscape HTTP Cookie File', cookieLine('.youtube.com', 'SID', 'synthetic-sid'),
+  `#HttpOnly_${cookieLine('.youtube.com', 'LOGIN_INFO', 'synthetic-login')}`, cookieLine('.google.com', 'SID', 'other-site'),
+  cookieLine('.example.com', 'session', 'unrelated'), ''].join('\r\n');
+function memoryStore() {
+  const settings = new Map();
+  return { setting: (key, fallback) => settings.has(key) ? structuredClone(settings.get(key)) : fallback,
+    setSetting: (key, value) => settings.set(key, structuredClone(value)) };
+}
+function memoryVault() {
+  const entries = new Map();
+  return { has: key => entries.has(key), get: async key => entries.get(key).trim(), put: async (key, value) => { entries.set(key, value); },
+    remove: key => entries.delete(key) };
+}
+
+test('a YouTube sign-in file keeps only youtube.com cookies and must contain a signed-in session', () => {
+  const file = youtubeCookies(exported);
+  assert.equal(file.count, 2);
+  assert.ok(file.contents.startsWith('# Netscape HTTP Cookie File\n'));
+  assert.match(file.contents, /synthetic-sid/); assert.match(file.contents, /#HttpOnly_\.youtube\.com\t.*LOGIN_INFO/);
+  assert.doesNotMatch(file.contents, /other-site|unrelated/);
+  assert.throws(() => youtubeCookies(''), /Choose the cookies.txt file/);
+  assert.throws(() => youtubeCookies('[{"domain":".youtube.com","name":"SID"}]'), /no youtube.com cookies/);
+  assert.throws(() => youtubeCookies(cookieLine('.youtube.com', 'PREF', 'signed-out')), /no YouTube sign-in/);
+  assert.throws(() => youtubeCookies('#'.repeat(1_000_001)), /up to 1 MB/);
+});
+
+test('a saved YouTube sign-in is passed to yt-dlp only through --cookies, and refusals say it was not accepted', async () => {
+  let args;
+  await liveUrl(source, { ...config, cookieFile: 'signin.txt' }, undefined, async (command, value) => {
+    args = value; return { stdout: 'https://cdn.example.test/synthetic.m3u8\n' };
+  });
+  assert.equal(args[args.indexOf('--cookies') + 1], 'signin.txt');
+  assert.equal(args.at(-1), source);
+  await assert.rejects(download(source, 'unused', { ...config, cookieFile: 'signin.txt' }, undefined, blocked),
+    error => error instanceof YouTubeVerificationRequired && error.signedIn && /fresh cookies file/.test(error.message));
+});
+
+test('each YouTube run gets a temporary sign-in copy; rotated cookies are kept unless the sign-in changed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clip-signin-unit-'));
+  const vault = memoryVault(), signin = new YouTubeSignin(root, vault, memoryStore());
+  try {
+    await signin.init();
+    assert.deepEqual(signin.status(), { configured: false });
+    assert.equal(await signin.use(source, async file => file), null);
+    assert.equal((await signin.save(exported)).cookies, 2);
+    assert.equal(await signin.use('https://vimeo.com/123', async file => file), null);
+    let copy;
+    assert.equal(await signin.use(source, async file => {
+      copy = file;
+      assert.match(await readFile(file, 'utf8'), /synthetic-sid/);
+      await writeFile(file, ['# Netscape HTTP Cookie File', cookieLine('.youtube.com', 'SID', 'rotated-sid'),
+        cookieLine('.youtube.com', 'LOGIN_INFO', 'synthetic-login'), cookieLine('.google.com', 'NID', 'other-site')].join('\n'));
+      return 'done';
+    }), 'done');
+    await assert.rejects(access(copy));
+    assert.match(await vault.get(signinKey), /rotated-sid/); assert.doesNotMatch(await vault.get(signinKey), /other-site/);
+    await signin.use(source, async file => {
+      await signin.save(exported.replace('synthetic-sid', 'replacement-sid'));
+      await writeFile(file, ['# Netscape HTTP Cookie File', cookieLine('.youtube.com', 'SID', 'stale-rotation')].join('\n'));
+    });
+    assert.match(await vault.get(signinKey), /replacement-sid/);
+    await assert.rejects(signin.use(source, async file => { copy = file; throw new Error('blocked'); }), /blocked/);
+    await assert.rejects(access(copy));
+    await writeFile(join(root, 'youtube-signin', 'left-by-crash.txt'), 'x');
+    await signin.init();
+    assert.deepEqual(await readdir(join(root, 'youtube-signin')), []);
+    assert.deepEqual(await signin.remove(), { configured: false });
+    assert.equal(await signin.use(source, async file => file), null);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('the studio saves a YouTube sign-in without exposing it and uses it only for YouTube imports', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clip-signin-'));
+  const seen = [];
+  const app = await createApp({ root, port: 0, config, importVideo: async (url, folder, options, signal) => {
+    seen.push({ url, file: options.cookieFile ?? null, contents: options.cookieFile ? await readFile(options.cookieFile, 'utf8') : null });
+    return download(url, folder, options, signal, blocked);
+  } });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const state = () => fetch(`${base}/api/state`).then(r => r.json());
+  const settled = async jobId => {
+    for (let i = 0; i < 300; i++) {
+      const job = (await state()).jobs.find(j => j.id === jobId);
+      if (!['queued', 'running'].includes(job.state)) return job;
+      await sleep(50);
+    }
+    throw new Error('Import did not finish');
+  };
+  try {
+    const initial = await state();
+    assert.deepEqual(initial.settings.youtubeSignin, { configured: false });
+    const headers = { 'X-Studio-Token': initial.token, 'Content-Type': 'application/json' };
+    const post = (path, body = {}) => fetch(base + path, { method: 'POST', headers, body: JSON.stringify(body) });
+    assert.equal((await post('/api/youtube-signin', { cookies: 'not a cookies file' })).status, 400);
+    const saved = await (await post('/api/youtube-signin', { cookies: exported })).json();
+    assert.equal(saved.configured, true); assert.equal(saved.cookies, 2);
+    const after = await state();
+    assert.ok(!JSON.stringify(after).includes('synthetic-sid'));
+    assert.ok(after.activity.some(a => a.action === 'Saved YouTube sign-in' && a.status === 200));
+    const workspaceId = after.workspaces[0].id;
+    const youtube = await settled((await (await post('/api/import', { workspaceId, url: canonical, networkConsent: true })).json()).jobId);
+    assert.match(seen[0].contents, /synthetic-sid/); assert.doesNotMatch(seen[0].contents, /other-site|unrelated/);
+    await assert.rejects(access(seen[0].file));
+    assert.deepEqual(youtube.recovery, { watchUrl: canonical, signedIn: true });
+    assert.equal(youtube.error, 'YouTube did not accept the saved YouTube sign-in.');
+    await settled((await (await post('/api/import', { workspaceId, url: 'https://vimeo.com/123', networkConsent: true })).json()).jobId);
+    assert.equal(seen[1].file, null);
+    assert.deepEqual(await (await post('/api/youtube-signin/remove')).json(), { configured: false });
+    assert.deepEqual((await state()).settings.youtubeSignin, { configured: false });
   } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
 });

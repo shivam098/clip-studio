@@ -5,8 +5,9 @@ import { liveUrl } from './imports.mjs';
 import { id, now } from './store.mjs';
 
 export class Live {
-  constructor(store, leases, root, config, addAsset) {
+  constructor(store, leases, root, config, addAsset, withSignin = (url, operation) => operation(null)) {
     this.store = store; this.leases = leases; this.root = root; this.config = config; this.addAsset = addAsset;
+    this.withSignin = withSignin;
     this.running = new Map();
   }
   async start(workspaceId, name, url, synthetic = false) {
@@ -22,7 +23,8 @@ export class Live {
       try {
         const input = synthetic
           ? ['-re', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=15', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '45']
-          : ['-protocol_whitelist', 'https,tls,tcp,crypto', '-i', await liveUrl(url, this.config, controller.signal)];
+          : ['-protocol_whitelist', 'https,tls,tcp,crypto', '-i', await this.withSignin(url, cookieFile =>
+            liveUrl(url, cookieFile ? { ...this.config, cookieFile } : this.config, controller.signal))];
         const scan = () => {
           entry.scan = entry.scan.then(() => this.scan(sessionId)).catch(error => {
             this.store.run('UPDATE live_sessions SET error=? WHERE id=?', error.message, sessionId);

@@ -73,7 +73,16 @@ If dependencies are not on PATH, create `%LOCALAPPDATA%\ClipStudio\data\config.j
 
 The downloader explicitly uses the same Node executable as Clip Studio, rather than relying on yt-dlp's Deno-only default. `requirements-download.txt` includes yt-dlp's matching `yt-dlp-ejs` scripts through its `default` dependency group. Runtime downloading of extra JavaScript components is disabled. Install requirements with the Python interpreter configured above (prefer an app-specific virtual environment).
 
-If YouTube requires verification, **Source library** in the importing workspace shows three choices. **Open on YouTube** opens that video in a new tab to watch or sign in on YouTube; it does not authorize or retry the download in Clip Studio. **Choose a video file** adds an authorized local copy to the original workspace through the regular upload flow. Cancelling the file picker leaves everything unchanged. **Dismiss** hides the prompt for that import, including after reload. Only the video ID is needed for the watch link; older failures without a retained ID offer the file and dismiss choices instead. Clip Studio never requests your YouTube credentials or browser cookies.
+**YouTube sign-in.** YouTube refuses anonymous downloads from many cloud and datacenter addresses ("Sign in to confirm you're not a bot"); on the studio PC every yt-dlp player client was refused this way. To import YouTube links there, add a YouTube sign-in in **Privacy & setup → YouTube sign-in for imports**:
+
+1. Open a private browser window and sign in to YouTube with the account to use. A separate account is safest.
+2. Open youtube.com in that window and export its cookies with a cookies.txt (Netscape format) browser extension.
+3. Close the private window without signing out, so YouTube does not rotate the exported session.
+4. Choose the file under **Exported cookies.txt** and select **Save YouTube sign-in**.
+
+Only youtube.com cookies are kept, in the studio's credential store (Windows DPAPI for the current user). YouTube imports and YouTube live capture pass a temporary copy to yt-dlp with `--cookies`; cookies that YouTube rotates during a download are saved back, and the copy is deleted afterwards. Vimeo and Twitch never receive it. Clip Studio does not read browser profiles. Activity records who saved or removed the sign-in.
+
+Risks: YouTube may flag or suspend an account used for automated downloads; everyone who can use the studio, including anyone who signs up through the shared link, imports with this sign-in; cookies expire and must be re-added. If YouTube still refuses, **Source library** in the importing workspace offers **Add YouTube sign-in** (opens Privacy & setup), **Choose a video file** (adds an authorized local copy to the original workspace through the regular upload flow) and **Dismiss** (hides the prompt for that import, including after reload). Imports are never retried automatically.
 
 Stop gracefully in another terminal:
 
@@ -130,7 +139,7 @@ Protocol references used independently:
 | Offline speech | Audio decoding and model inference on CPU | None; preinstall models separately |
 | Heuristic moments | Transcript rules or evenly spaced windows | None |
 | Configured model | Saved endpoint/configuration | Transcript text to that endpoint only after explicit request; remote consent required per run |
-| URL import/live capture | Downloaded media/buffers | Requested source URL and network address visible to source platforms/CDNs |
+| URL import/live capture | Downloaded media/buffers; saved YouTube sign-in (youtube.com cookies) | Requested source URL and network address visible to source platforms/CDNs; YouTube requests carry the saved sign-in's account |
 | Publishing/reconciliation | Durable approval, attempt, limits, provider IDs | Selected rendered video, metadata and authorized credentials to the selected platform; reconciliation queries its status |
 
 No frame images are sent, no telemetry is collected, and no personal media directory is scanned. Provider retention/training rules are provider-specific; the application does not promise zero retention by an external endpoint. A browser page's same-origin token and Host/Origin checks guard mutations; this is **not** authentication against other software/users already on the machine. Keep the data directory private. The SQLite database includes transcripts and sensitive resumable-session URLs. Protect backups accordingly.

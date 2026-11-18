@@ -97,19 +97,23 @@ function draw() {
   const recoveries = state.jobs.filter(job => job.resource_id === workspaceId && job.recovery);
   const workspaceName = state.workspaces.find(w => w.id === workspaceId)?.name;
   setMarkup('#import-recoveries', recoveries.map(job => `<article class="warning" aria-label="Blocked YouTube import">
-    <h3>YouTube needs verification</h3>
+    <h3>${job.recovery.signedIn ? 'YouTube did not accept the saved sign-in' : 'YouTube needs a sign-in'}</h3>
     <p>Import into <strong>${escape(workspaceName)}</strong> at ${escape(new Date(job.created).toLocaleString())}.</p>
-    <p>${job.recovery.watchUrl ? 'Open the video on YouTube to watch or sign in there.' : 'No verified video link is available for this import. Use your original link to watch or sign in on YouTube.'}
-    Signing in on YouTube does not sign Clip Studio in or restart this download.</p>
-    <p>To edit here, choose a local video file you have permission to use. It will be added to this workspace.</p>
-    <div class="button-row">${job.recovery.watchUrl ? `<a href="${escape(job.recovery.watchUrl)}" target="_blank" rel="noopener noreferrer">Open on YouTube</a>` : ''}
-    <button type="button" data-recovery-file="${escape(job.id)}">Choose a video file</button>
+    <p>${job.recovery.signedIn ? 'The saved YouTube sign-in was refused or has expired. Add a fresh cookies file in Privacy &amp; setup, then import the link again.'
+      : 'YouTube refuses downloads from this cloud PC without a signed-in YouTube account. Add a YouTube sign-in (cookies file) in Privacy &amp; setup, then import the link again.'}</p>
+    <p>Or choose a local video file you have permission to use. It will be added to this workspace.</p>
+    <div class="button-row"><button type="button" data-open-signin="1">Add YouTube sign-in</button>
+    <button type="button" class="secondary" data-recovery-file="${escape(job.id)}">Choose a video file</button>
     <button type="button" class="quiet" data-recovery-dismiss="${escape(job.id)}">Dismiss</button></div>
   </article>`).join(''));
   if (recoveries.some(job => job.id === submittedImport)) {
     submittedImport = null;
-    notify('YouTube needs verification. See the options under Source library.');
+    notify('YouTube needs a sign-in for this import. See the options under Source library.');
   }
+  const youtubeSignin = state.settings.youtubeSignin;
+  $('#youtube-signin-status').textContent = youtubeSignin.configured
+    ? `Saved: ${youtubeSignin.cookies} youtube.com cookies, updated ${new Date(youtubeSignin.updated).toLocaleString()}.`
+    : 'No YouTube sign-in saved.';
   const assets = state.assets.filter(a => a.workspace_id === workspaceId);
   const clips = state.clips.filter(c => assets.some(a => a.id === c.asset_id));
   setMarkup('#assets', assets.map(a => `<button class="asset ${a.id === assetId ? 'active' : ''}" data-asset="${a.id}"><span class="asset-icon">▶</span><strong>${escape(a.name)}</strong><small>${seconds(a.duration)} · ${a.width} × ${a.height}${a.audio ? ' · audio' : ' · silent'}</small></button>`).join(''));
@@ -247,6 +251,18 @@ action('#ai-form', async () => {
   $('#ai-token').value = ''; notify('Model configuration saved. No transcript was sent.');
 }, 'submit');
 action('#diagnostics', async () => { $('#diagnostic-result').textContent = JSON.stringify(await api('/api/diagnostics', null, 'GET'), null, 2); });
+action('#youtube-signin-form', async () => {
+  const file = $('#youtube-cookies').files[0];
+  if (!file) throw new Error('Choose the cookies.txt file you exported');
+  if (file.size > 1_000_000) throw new Error('Choose a cookies.txt file of up to 1 MB');
+  const result = await api('/api/youtube-signin', { cookies: await file.text() });
+  $('#youtube-cookies').value = '';
+  notify(`YouTube sign-in saved (${result.cookies} youtube.com cookies). Import your YouTube link again.`);
+}, 'submit');
+action('#youtube-signin-remove', async () => {
+  await api('/api/youtube-signin/remove');
+  notify('YouTube sign-in removed. YouTube imports from this PC will ask for one again.');
+});
 action('#remote-logout', async () => { await api('/auth/logout'); location.replace('/'); });
 document.addEventListener('click', async event => {
   const button = event.target.closest('button');
@@ -255,6 +271,11 @@ document.addEventListener('click', async event => {
   if (!Object.keys(d).length || d.tab) return;
   button.disabled = true;
   try {
+    if (d.openSignin) {
+      tab('settings');
+      $('#youtube-cookies').focus();
+      return;
+    }
     if (d.recoveryFile) {
       const job = state.jobs.find(j => j.id === d.recoveryFile && j.resource_id === workspaceId && j.recovery);
       if (!job) throw new Error('This import is no longer waiting for a file');

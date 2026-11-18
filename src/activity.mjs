@@ -23,6 +23,8 @@ const routes = new Map(Object.entries({
   'POST /api/live/:id/stop': 'Stopped live capture',
   'POST /api/live/:id/cleanup': 'Cleaned up live buffers',
   'POST /api/settings': 'Changed studio settings',
+  'POST /api/youtube-signin': 'Saved YouTube sign-in',
+  'POST /api/youtube-signin/remove': 'Removed YouTube sign-in',
   'POST /api/accounts': 'Added publishing account',
   'POST /api/accounts/:id': 'Changed publishing account',
   'POST /api/accounts/:id/verify': 'Verified publishing account',
