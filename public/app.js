@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 const seconds = value => `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}`;
 let state, workspaceId, assetId, editingClip = null, lastSuggestions = '', transcriptSignature = '', refreshBusy = false;
+let pendingRecovery = null, submittedImport = null;
 const markup = new Map();
 function setMarkup(selector, html) {
   if (markup.get(selector) !== html) { $(selector).innerHTML = html; markup.set(selector, html); }
@@ -55,6 +56,7 @@ async function selectAsset(selectedId) {
   $('#source-name').textContent = asset.name;
   $('#source-info').textContent = `${asset.width} × ${asset.height} · ${seconds(asset.duration)}`;
   const transcript = await api(`/api/assets/${assetId}/transcript`, null, 'GET');
+  if (assetId !== selectedId || workspaceId !== asset.workspace_id) return;
   $('#transcript').value = captionText(transcript.segments);
   $('#transcript-source').textContent = transcript.source;
   transcriptSignature = transcriptStamp();
@@ -87,6 +89,22 @@ function privacyOptions() {
 function draw() {
   selectOptions('#workspace', state.workspaces, w => w.name);
   $('#workspace').value = workspaceId;
+  const recoveries = state.jobs.filter(job => job.resource_id === workspaceId && job.recovery);
+  const workspaceName = state.workspaces.find(w => w.id === workspaceId)?.name;
+  setMarkup('#import-recoveries', recoveries.map(job => `<article class="warning" aria-label="Blocked YouTube import">
+    <h3>YouTube needs verification</h3>
+    <p>Import into <strong>${escape(workspaceName)}</strong> at ${escape(new Date(job.created).toLocaleString())}.</p>
+    <p>${job.recovery.watchUrl ? 'Open the video on YouTube to watch or sign in there.' : 'No verified video link is available for this import. Use your original link to watch or sign in on YouTube.'}
+    Signing in on YouTube does not sign Clip Studio in or restart this download.</p>
+    <p>To edit here, choose a local video file you have permission to use. It will be added to this workspace.</p>
+    <div class="button-row">${job.recovery.watchUrl ? `<a href="${escape(job.recovery.watchUrl)}" target="_blank" rel="noopener noreferrer">Open on YouTube</a>` : ''}
+    <button type="button" data-recovery-file="${escape(job.id)}">Choose a video file</button>
+    <button type="button" class="quiet" data-recovery-dismiss="${escape(job.id)}">Dismiss</button></div>
+  </article>`).join(''));
+  if (recoveries.some(job => job.id === submittedImport)) {
+    submittedImport = null;
+    notify('YouTube needs verification. See the options under Source library.');
+  }
   const assets = state.assets.filter(a => a.workspace_id === workspaceId);
   const clips = state.clips.filter(c => assets.some(a => a.id === c.asset_id));
   setMarkup('#assets', assets.map(a => `<button class="asset ${a.id === assetId ? 'active' : ''}" data-asset="${a.id}"><span class="asset-icon">▶</span><strong>${escape(a.name)}</strong><small>${seconds(a.duration)} · ${a.width} × ${a.height}${a.audio ? ' · audio' : ' · silent'}</small></button>`).join(''));
@@ -135,17 +153,31 @@ action('#workspace-form', async () => {
   const result = await api('/api/workspaces', { name: $('#workspace-name').value, creator: $('#creator-name').value });
   workspaceId = result.id; assetId = null; $('#editor').classList.add('hidden'); $('#workspace-dialog').close();
 }, 'submit');
-action('#upload-form', async () => {
-  const file = $('#video-file').files[0];
+async function uploadFile(file, destination, recoveryId) {
   if (!file) throw new Error('Choose a video');
   notify('Uploading to local storage…');
-  const response = await fetch(`/api/upload?workspace=${workspaceId}&name=${encodeURIComponent(file.name)}`,
+  const params = new URLSearchParams({ workspace: destination, name: file.name });
+  if (recoveryId) params.set('recovery', recoveryId);
+  const response = await fetch(`/api/upload?${params}`,
     { method: 'POST', headers: { 'X-Studio-Token': state.token, 'Content-Type': 'application/octet-stream' }, body: file });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error);
-  await refresh(); await selectAsset(result.id); notify('Video added locally.');
+  await refresh();
+  if (workspaceId === destination && state.assets.some(asset => asset.id === result.id)) await selectAsset(result.id);
+  notify(`Video added to ${state.workspaces.find(w => w.id === destination)?.name ?? 'the original workspace'}.`);
+}
+action('#upload-form', () => uploadFile($('#video-file').files[0], workspaceId), 'submit');
+action('#recovery-file', async event => {
+  const job = pendingRecovery, file = event.target.files[0];
+  pendingRecovery = null;
+  if (job && file) await uploadFile(file, job.resource_id, job.id);
+}, 'change');
+$('#recovery-file').addEventListener('cancel', () => { pendingRecovery = null; });
+action('#url-form', async () => {
+  const result = await api('/api/import', { workspaceId, url: $('#source-url').value, networkConsent: $('#url-consent').checked });
+  submittedImport = result.jobId;
+  notify('Import queued. See Activity for the result.');
 }, 'submit');
-action('#url-form', async () => { await api('/api/import', { workspaceId, url: $('#source-url').value, networkConsent: $('#url-consent').checked }); notify('Import queued. See Activity for the result.'); }, 'submit');
 action('#demo', async () => { await api('/api/demo', { workspaceId }); notify('Creating synthetic video and local speech. It will appear in your library.'); });
 action('#transcribe', async () => { await api(`/api/assets/${assetId}/transcribe`); notify('Offline transcription started. You can continue selecting clips.'); });
 action('#heuristic', async () => { await api(`/api/assets/${assetId}/analyze`, { method: 'heuristic' }); notify('Selecting review windows with local text rules, not AI.'); });
@@ -195,6 +227,17 @@ document.addEventListener('click', async event => {
   if (!Object.keys(d).length || d.tab) return;
   button.disabled = true;
   try {
+    if (d.recoveryFile) {
+      const job = state.jobs.find(j => j.id === d.recoveryFile && j.resource_id === workspaceId && j.recovery);
+      if (!job) throw new Error('This import is no longer waiting for a file');
+      const picker = $('#recovery-file');
+      if (picker.disabled) throw new Error('Another recovery upload is in progress');
+      pendingRecovery = job;
+      picker.value = '';
+      picker.click();
+      return;
+    }
+    if (d.recoveryDismiss) await api(`/api/jobs/${d.recoveryDismiss}/dismiss-recovery`);
     if (d.asset) await selectAsset(d.asset);
     if (d.edit) {
       const clip = state.clips.find(c => c.id === d.edit);

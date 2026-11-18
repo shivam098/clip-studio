@@ -11,7 +11,7 @@ import { Jobs, AnalysisLeases } from './jobs.mjs';
 import { readConfig, dataDir } from './config.mjs';
 import { probe, render, transcribe, validateSegments } from './media.mjs';
 import { run } from './process.mjs';
-import { download, supportedUrl } from './imports.mjs';
+import { download, supportedUrl, importRecovery, YouTubeVerificationRequired } from './imports.mjs';
 import { modelEndpoint, suggestions } from './analysis.mjs';
 import { Vault } from './vault.mjs';
 import { Providers } from './providers.mjs';
@@ -22,6 +22,12 @@ const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const limit = 2 * 1024 ** 3;
 const publicAsset = ({ path, ...asset }) => asset;
 const publicClip = ({ output, ...clip }) => ({ ...clip, rendered: !!output, captions: parse(clip.captions) });
+function publicJob({ payload, result, ...job }) {
+  const output = ['import', 'demo', 'analyze'].includes(job.type) ? parse(result) : null;
+  const recovery = importRecovery(job, output);
+  return { ...job, error: recovery ? 'YouTube requires verification to import this video.' : job.error,
+    result: job.state === 'succeeded' ? output : null, recovery: recovery && !parse(payload)?.recoveryDismissed ? recovery : null };
+}
 const text = (value, label, max = 160) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`${label} must contain 1-${max} characters`);
   return value.trim();
@@ -68,7 +74,7 @@ async function mediaResponse(req, res, file, downloadName) {
   catch (error) { if (!['ERR_STREAM_PREMATURE_CLOSE', 'ECONNRESET'].includes(error.code)) throw error; }
 }
 
-export async function createApp({ root = dataDir, config = readConfig(root), port = 4318, providers = new Providers() } = {}) {
+export async function createApp({ root = dataDir, config = readConfig(root), port = 4318, providers = new Providers(), importVideo = download } = {}) {
   await mkdir(root, { recursive: true });
   const lockPath = join(root, 'server.lock');
   try {
@@ -99,11 +105,21 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     if (!store.get('SELECT id FROM workspaces WHERE id=?', workspaceId)) throw new Error('Workspace not found');
     return workspaceId;
   };
-  async function addAsset(path, workspaceId, name, signal) {
+  const getRecoveryJob = jobId => {
+    const row = store.get('SELECT type,state,resource_id,error,result,payload FROM jobs WHERE id=?', jobId);
+    if (!row || !publicJob(row).recovery) throw new Error('Import recovery is no longer available');
+    return row;
+  };
+  const dismissRecovery = jobId => store.run("UPDATE jobs SET payload=json_set(payload,'$.recoveryDismissed',1) WHERE id=?", jobId);
+  async function addAsset(path, workspaceId, name, signal, recoveryJobId) {
     const info = await probe(path, config, signal), assetId = id();
     signal?.throwIfAborted();
-    store.run('INSERT INTO assets VALUES (?,?,?,?,?,?,?,?,?)', assetId, workspaceId, name, path,
-      info.duration, info.width, info.height, info.audio, now());
+    store.tx(() => {
+      if (recoveryJobId) getRecoveryJob(recoveryJobId);
+      store.run('INSERT INTO assets VALUES (?,?,?,?,?,?,?,?,?)', assetId, workspaceId, name, path,
+        info.duration, info.width, info.height, info.audio, now());
+      if (recoveryJobId) dismissRecovery(recoveryJobId);
+    });
     return { id: assetId, ...info };
   }
   const live = new Live(store, leases, root, config, addAsset);
@@ -153,8 +169,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
           token: csrf, workspaces: store.all('SELECT * FROM workspaces ORDER BY created'),
           assets: store.all('SELECT * FROM assets ORDER BY created DESC').map(publicAsset),
           clips: store.all('SELECT * FROM clips ORDER BY created DESC').map(publicClip),
-          jobs: store.all('SELECT id,type,resource_id,state,error,created,started,finished,result FROM jobs ORDER BY created DESC LIMIT 100')
-            .map(job => ({ ...job, result: job.type === 'analyze' || job.type === 'demo' || job.type === 'import' ? parse(job.result) : null })),
+          jobs: store.all('SELECT id,type,resource_id,state,error,created,started,finished,result,payload FROM jobs ORDER BY created DESC LIMIT 100').map(publicJob),
           live: store.all('SELECT id,workspace_id,name,state,error,created FROM live_sessions ORDER BY created DESC'),
           segments: store.all('SELECT id,session_id,asset_id FROM live_segments ORDER BY created,id'),
           accounts: store.all('SELECT a.*,b.remote_id,b.display_name,b.verified FROM accounts a LEFT JOIN account_bindings b ON b.account_id=a.id')
@@ -196,6 +211,8 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
       }
       if (req.method === 'POST' && url.pathname === '/api/upload') {
         const workspaceId = getWorkspace(url.searchParams.get('workspace'));
+        const recoveryJobId = url.searchParams.get('recovery');
+        if (recoveryJobId && getRecoveryJob(recoveryJobId).resource_id !== workspaceId) throw new Error('Choose a file for the original import workspace');
         const name = text(url.searchParams.get('name'), 'Filename', 255);
         const folder = join(root, 'uploads', id());
         await mkdir(folder, { recursive: true });
@@ -205,7 +222,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
           await pipeline(req, new Transform({ transform(chunk, encoding, cb) {
             bytes += chunk.length; cb(bytes > limit ? new Error('Upload exceeds 2 GiB') : null, chunk);
           } }), createWriteStream(file, { flags: 'wx' }));
-          const asset = await addAsset(file, workspaceId, name, AbortSignal.timeout(30000));
+          const asset = await addAsset(file, workspaceId, name, AbortSignal.timeout(30000), recoveryJobId);
           success = true;
           return send(res, 201, asset);
         } finally { if (!success) await rm(folder, { recursive: true, force: true }); }
@@ -234,10 +251,11 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
             const audio = process.platform === 'win32' ? ['-i', speech] : ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-t', '12'];
             await run(config.ffmpeg, ['-hide_banner', '-nostdin', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=960x540:rate=30',
               ...audio, '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '2', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path], { signal: ctx.signal });
-          } else path = await download(input.url, folder, config, ctx.signal);
+          } else path = await importVideo(input.url, folder, config, ctx.signal);
           const info = await probe(path, config, ctx.signal);
           return { id: id(), path, workspaceId, name: isDemo ? 'Studio demo (synthetic)' : 'Imported video', ...info };
-        }, { timeout: 30 * 60_000, commit: asset => {
+        }, { timeout: 30 * 60_000, failureResult: error => error instanceof YouTubeVerificationRequired
+          ? { reason: 'youtube-verification', videoId: error.videoId } : { reason: 'other' }, commit: asset => {
           store.run('INSERT INTO assets VALUES (?,?,?,?,?,?,?,?,?)', asset.id, asset.workspaceId, asset.name, asset.path,
             asset.duration, asset.width, asset.height, asset.audio, now());
           // Paths are retained only in assets, not in the publicly returned job result.
@@ -310,6 +328,9 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
           },
         })));
         return send(res, 202, { jobId });
+      }
+      if (parts[0] === 'api' && parts[1] === 'jobs' && parts[3] === 'dismiss-recovery' && parts.length === 4 && req.method === 'POST') {
+        getRecoveryJob(parts[2]); dismissRecovery(parts[2]); return send(res, 200, { dismissed: true });
       }
       if (parts[0] === 'api' && parts[1] === 'jobs' && parts[3] === 'cancel' && req.method === 'POST') {
         jobs.cancel(parts[2]); return send(res, 200, { cancelled: true });

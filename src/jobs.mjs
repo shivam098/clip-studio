@@ -14,7 +14,7 @@ export class Jobs {
   owns(jobId, attempt) {
     return !!this.store.get("SELECT id FROM jobs WHERE id=? AND attempt=? AND state='running'", jobId, attempt);
   }
-  start(jobId, execute, { timeout = 600_000, commit = () => {}, release = () => {} } = {}) {
+  start(jobId, execute, { timeout = 600_000, commit = () => {}, release = () => {}, failureResult = () => null } = {}) {
     const attempt = id();
     const row = this.store.get("SELECT * FROM jobs WHERE id=? AND state='queued'", jobId);
     if (!row) throw new Error('Job is not queued');
@@ -45,8 +45,8 @@ export class Jobs {
             json(result ?? null), now(), jobId, attempt);
         });
       } catch (error) {
-        this.store.run("UPDATE jobs SET state='failed',error=?,finished=? WHERE id=? AND attempt=? AND state='running'",
-          error.message, now(), jobId, attempt);
+        this.store.run("UPDATE jobs SET state='failed',error=?,result=?,finished=? WHERE id=? AND attempt=? AND state='running'",
+          error.message, json(failureResult(error)), now(), jobId, attempt);
       } finally {
         clearTimeout(timer);
         try { await release({ attempt, job: row }); }

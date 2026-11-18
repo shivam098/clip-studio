@@ -28,6 +28,8 @@
     <section id="studio" class="page">
       <div class="hero"><div><p class="eyebrow">FROM LONG-FORM TO ONE GOOD IDEA</p><h2>A small studio.<br>A shorter story.</h2><p>Bring a video, find a moment, make it yours.<br>Review everything before it leaves your machine.</p></div><div class="hero-right"><div class="aspect-demo"><span>9:16</span><strong>YOUR NEXT<br>GREAT CLIP</strong><i>captions included</i></div></div></div>
       <div class="section-title"><h2>Source library</h2><button id="demo" class="quiet">Create synthetic demo</button></div>
+      <section id="import-recoveries" aria-label="YouTube import options" aria-live="polite"></section>
+      <input id="recovery-file" type="file" accept="video/*" hidden aria-label="Video file for this import">
       <div class="import-grid">
         <form id="upload-form" class="panel"><h3>Upload a video</h3><p>MP4, MOV, WebM or MKV · up to 2 GiB<br>Stored only on this computer.</p><label for="video-file">Video file</label><input id="video-file" type="file" accept="video/*" required><button type="submit">Add to library</button></form>
         <form id="url-form" class="panel"><h3>Import from a link</h3><p>YouTube, Vimeo and Twitch; availability depends on the source. Only import media you have rights to use. If a site requires sign-in or bot verification, use an authorized local copy instead; this app does not read browser cookies.</p><label for="source-url">Video URL</label><input id="source-url" type="url" placeholder="https://…" required><label class="check"><input id="url-consent" type="checkbox" required> Contact the source site to download this video.</label><button type="submit" class="secondary">Import video</button></form>

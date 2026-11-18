@@ -55,7 +55,7 @@ If dependencies are not on PATH, create `%LOCALAPPDATA%\ClipStudio\data\config.j
 
 The downloader explicitly uses the same Node executable as Clip Studio, rather than relying on yt-dlp's Deno-only default. `requirements-download.txt` includes yt-dlp's matching `yt-dlp-ejs` scripts through its `default` dependency group. Runtime downloading of extra JavaScript components is disabled. Install requirements with the Python interpreter configured above (prefer an app-specific virtual environment).
 
-This fixes local runtime setup, not YouTube's separate sign-in/anti-bot restrictions. A blocked request stops with an explicit explanation; Clip Studio does not retry through alternate clients, extract browser cookies, or complete verification. Use Upload with a local video you are authorized to download when the source requires verification.
+If YouTube requires verification, **Source library** in the importing workspace shows three choices. **Open on YouTube** opens that video in a new tab to watch or sign in on YouTube; it does not authorize or retry the download in Clip Studio. **Choose a video file** adds an authorized local copy to the original workspace through the regular upload flow. Cancelling the file picker leaves everything unchanged. **Dismiss** hides the prompt for that import, including after reload. Only the video ID is needed for the watch link; older failures without a retained ID offer the file and dismiss choices instead. Clip Studio never requests your YouTube credentials or browser cookies.
 
 Stop gracefully in another terminal:
 
