@@ -32,12 +32,15 @@ test('isolated tunnel listener locks without a password, authenticates the exact
   const password = randomBytes(24).toString('hex');
   const login = (value, site = origin) => send('/auth/login','POST',{Origin:site,'Content-Type':'application/x-www-form-urlencoded'},new URLSearchParams({password:value}).toString());
   try {
-    assert.match((await send('/')).text,/cannot be set here/);
+    const locked = await send('/');
+    assert.match(locked.text,/cannot be set here/);
+    assert.equal(locked.headers['referrer-policy'],'same-origin');
     assert.equal((await send('/api/state')).status,401);
     assert.equal((await send('/api/remote/password','POST',{Origin:origin})).status,401);
     const pw = await auth.set(password, null);
     assert.ok(!JSON.stringify(auth.current()).includes(password));
     assert.equal((await login(password,'https://different.example')).status,403);
+    assert.equal((await login(password,'null')).status,403);
     assert.equal((await login('wrong')).status,401);
     const success = await login(password); assert.equal(success.status,303);
     const set = success.headers['set-cookie'][0]; assert.match(set, /Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Strict$/);

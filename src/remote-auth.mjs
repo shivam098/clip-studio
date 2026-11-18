@@ -52,7 +52,9 @@ export class OwnerAccess {
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store'); res.setHeader('CDN-Cache-Control', 'no-store');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-    res.setHeader('Vary', 'Origin, Cookie'); res.setHeader('Referrer-Policy', 'no-referrer');
+    // A native form POST with no-referrer can send Origin: null. Keep the true origin
+    // for same-site sign-in and writes, but never send a referrer to another origin.
+    res.setHeader('Vary', 'Origin, Cookie'); res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('X-Frame-Options', 'DENY');
     if (!binding || !active() || req.headers.host !== new URL(binding.origin).host ||
         !req.url?.startsWith('/') || req.url.startsWith('//')) { json(res, 403, { error: 'Remote origin is not active.' }); return; }
