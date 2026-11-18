@@ -12,12 +12,13 @@ import { readConfig, dataDir } from './config.mjs';
 import { probe, render, transcribe, validateSegments } from './media.mjs';
 import { run } from './process.mjs';
 import { download, supportedUrl, importRecovery, YouTubeVerificationRequired } from './imports.mjs';
-import { modelEndpoint, suggestions } from './analysis.mjs';
+import { modelEndpoint, modelCredentialKey, suggestions } from './analysis.mjs';
 import { Vault } from './vault.mjs';
 import { Providers } from './providers.mjs';
 import { Publishing } from './publishing.mjs';
 import { Live } from './live.mjs';
-import { OwnerAccess } from './remote-auth.mjs';
+import { StudioAccess } from './remote-auth.mjs';
+import { auditRequest, isResourceId } from './activity.mjs';
 import { Tunnel } from './tunnel.mjs';
 import { Uploads, maxVideo } from './uploads.mjs';
 
@@ -52,7 +53,11 @@ async function body(req) {
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
+const resultRef = Symbol('action result');
 function send(res, status, value) {
+  if (status < 400 && value && (isResourceId(value.jobId) || isResourceId(value.id))) {
+    res[resultRef] = { job: value.jobId ?? null, id: value.id ?? null };
+  }
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(json(value));
 }
@@ -77,7 +82,8 @@ async function mediaResponse(req, res, file, downloadName) {
   catch (error) { if (!['ERR_STREAM_PREMATURE_CLOSE', 'ECONNRESET'].includes(error.code)) throw error; }
 }
 
-export async function createApp({ root = dataDir, config = readConfig(root), port = 4318, providers = new Providers(), importVideo = download } = {}) {
+export async function createApp({ root = dataDir, config = readConfig(root), port = 4318, providers = new Providers(), importVideo = download,
+  makeTunnel = (root, dispatch, revoke) => new Tunnel(root, dispatch, revoke) } = {}) {
   await mkdir(root, { recursive: true });
   const lockPath = join(root, 'server.lock');
   try {
@@ -91,6 +97,8 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
   await lock.close();
   const store = new Store(join(root, 'studio.sqlite'));
   const jobs = new Jobs(store), leases = new AnalysisLeases(store), vault = new Vault(root);
+  const savedModel = store.setting('ai', null);
+  if (savedModel?.endpoint) vault.moveIfPresent('ai', modelCredentialKey(savedModel.endpoint));
   const publishing = new Publishing(store, providers, vault);
   const csrf = randomBytes(32).toString('hex');
   const getAsset = assetId => {
@@ -128,7 +136,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
   const live = new Live(store, leases, root, config, addAsset);
   const uploads = new Uploads(root, addAsset);
   await uploads.init();
-  const access = new OwnerAccess(store);
+  const access = new StudioAccess(store);
   // Binding must succeed before startup recovery; another server must never reset live ownership.
   let ticking = false;
   const tasks = new Set();
@@ -150,16 +158,18 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
   const requests = new Set();
   let stopping = false;
   const handle = async (req, res, remote) => {
+    let auditId;
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       if (stopping) return send(res, 503, { error: 'Server is stopping' });
-      let token = csrf;
+      let token = csrf, email = null;
       if (remote) {
         const session = await access.gate(req, res, remote.binding, remote.active);
         if (!session) return;
         token = session.csrf;
+        email = session.email;
       } else {
         const actualPort = server.address()?.port ?? port;
         const allowedHosts = [`127.0.0.1:${actualPort}`, `localhost:${actualPort}`];
@@ -171,17 +181,15 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
       const url = new URL(req.url, `http://${req.headers.host}`);
       const parts = url.pathname.split('/').filter(Boolean);
       if (!['GET', 'HEAD'].includes(req.method) && req.headers['x-studio-token'] !== token) return send(res, 403, { error: 'Missing session token; reload the page' });
+      const event = auditRequest(req.method, url);
+      if (event) auditId = store.recordAction(email, event.action, event.resource);
       if (!remote && url.pathname === '/api/remote/control') {
-        if (req.method === 'GET') return send(res, 200, { service: 'clip-studio-full-control-v1', token, ...access.status(), ...tunnel.status() });
+        if (req.method === 'GET') return send(res, 200, { service: 'clip-studio-full-control-v1', token, ...tunnel.status() });
         if (req.method === 'POST') {
           const input = await body(req);
           if (!['start','stop'].includes(input.action)) throw new Error('Use start or stop.');
           return send(res, 200, await tunnel.change(input.action));
         }
-      }
-      if (!remote && req.method === 'POST' && url.pathname === '/api/remote/password') {
-        const input = await body(req);
-        return send(res, 200, await access.set(input.password, input.revision));
       }
       if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true, name: 'Clip Studio', version: '0.1.0' });
       if (req.method === 'POST' && url.pathname === '/api/shutdown') {
@@ -192,12 +200,16 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/state') {
+        const ai = store.setting('ai', null);
         return send(res, 200, {
-          token, access: remote ? { remote: true } : { remote: false, ...access.status() },
+          token, access: remote ? { remote: true, email } : { remote: false },
           workspaces: store.all('SELECT * FROM workspaces ORDER BY created'),
           assets: store.all('SELECT * FROM assets ORDER BY created DESC').map(publicAsset),
           clips: store.all('SELECT * FROM clips ORDER BY created DESC').map(publicClip),
-          jobs: store.all('SELECT id,type,resource_id,state,error,created,started,finished,result,payload FROM jobs ORDER BY created DESC LIMIT 100').map(publicJob),
+          jobs: store.all(`SELECT j.id,j.type,j.resource_id,j.state,j.error,j.created,j.started,j.finished,j.result,j.payload,
+            CASE WHEN a.id IS NOT NULL THEN COALESCE(a.email,'This PC') END AS actor
+            FROM jobs j LEFT JOIN activity a ON a.job_id=j.id ORDER BY j.created DESC LIMIT 100`).map(publicJob),
+          activity: store.all('SELECT id,created,email,action,resource,job_id,status FROM activity ORDER BY id DESC LIMIT 100'),
           live: store.all('SELECT id,workspace_id,name,state,error,created FROM live_sessions ORDER BY created DESC'),
           segments: store.all('SELECT id,session_id,asset_id FROM live_segments ORDER BY created,id'),
           accounts: store.all('SELECT a.*,b.remote_id,b.display_name,b.verified FROM accounts a LEFT JOIN account_bindings b ON b.account_id=a.id')
@@ -206,7 +218,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
             .map(p => { const ref = parse(p.provider_ref); return { ...p, metadata: parse(p.metadata), result: parse(p.result),
               provider_ref: { phase: ref.phase, id: ref.videoId ?? ref.mediaId ?? ref.containerId ?? ref.publishId, hasSession: !!ref.session } }; }),
           settings: { publishingEnabled: store.setting('publishingEnabled', false),
-            ai: store.setting('ai', null), aiCredential: vault.has('ai'), model: config.model,
+            ai, aiCredential: !!ai && vault.has(modelCredentialKey(ai.endpoint)), model: config.model,
             storage: root, secrets: process.platform === 'win32' ? 'Windows DPAPI, current user' : 'Owner-readable credential file' },
         });
       }
@@ -335,8 +347,9 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
           if (!ai?.enabled) throw new Error('Configure and enable the model first');
           if (!modelEndpoint(ai.endpoint).local && input.networkConsent !== true) throw new Error('Explicit transcript egress consent is required');
         }
+        const credential = ai && modelCredentialKey(ai.endpoint);
         return send(res, 202, startAssetJob(asset, 'analyze',
-          async ctx => suggestions(segments, asset.duration, ai, ai && vault.has('ai') ? await vault.get('ai') : null, ctx.signal),
+          async ctx => suggestions(segments, asset.duration, ai, credential && vault.has(credential) ? await vault.get(credential) : null, ctx.signal),
           () => {}));
       }
       if (parts[0] === 'api' && parts[1] === 'clips' && req.method === 'POST' && !parts[3]) {
@@ -397,10 +410,10 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
         }
         if ('ai' in input) {
           const ai = input.ai;
-          modelEndpoint(ai.endpoint);
-          if (ai.enabled && input.networkConsent !== true && !modelEndpoint(ai.endpoint).local) throw new Error('Approve remote transcript processing before enabling this endpoint');
-          if (ai.token) await vault.put('ai', text(ai.token, 'API key', 8192));
-          store.setSetting('ai', { endpoint: ai.endpoint, model: text(ai.model, 'Model name'), enabled: ai.enabled === true });
+          const endpoint = modelEndpoint(ai.endpoint), model = text(ai.model, 'Model name');
+          if (ai.enabled && input.networkConsent !== true && !endpoint.local) throw new Error('Approve remote transcript processing before enabling this endpoint');
+          if (ai.token) await vault.put(modelCredentialKey(endpoint.url), text(ai.token, 'API key', 8192));
+          store.setSetting('ai', { endpoint: endpoint.url, model, enabled: ai.enabled === true });
         }
         return send(res, 200, { saved: true });
       }
@@ -492,6 +505,12 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     } catch (error) {
       if (!res.headersSent && !res.destroyed) send(res, 400, { error: error.message });
       else if (!res.destroyed) res.destroy();
+    } finally {
+      if (auditId != null) {
+        const result = res[resultRef];
+        store.run('UPDATE activity SET status=?,resource=COALESCE(resource,?),job_id=? WHERE id=?',
+          res.destroyed && !res.writableFinished ? 499 : res.statusCode, result?.id ?? null, result?.job ?? null, auditId);
+      }
     }
   };
   const dispatch = (req, res, remote) => {
@@ -499,7 +518,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     requests.add(request);
     request.finally(() => requests.delete(request)).catch(error => console.error(`Request failed: ${error.message}`));
   };
-  const tunnel = new Tunnel(root, dispatch, () => access.revoke());
+  const tunnel = makeTunnel(root, dispatch, () => access.revoke());
   const server = http.createServer((req, res) => dispatch(req, res, null));
   server.requestTimeout = 30 * 60_000;
   try {

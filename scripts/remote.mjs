@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync } from 'node:fs';
 import net from 'node:net';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dataDir } from '../src/config.mjs';
 import { pagesUrl, destination, verifyBeacon, leaseMs, offline } from '../launcher/policy.mjs';
@@ -69,11 +69,19 @@ function pointerStore() {
       content: Buffer.from(JSON.stringify(next) + '\n').toString('base64') });
   } };
 }
-async function ready(binding) {
-  for (let i = 0; i < 10; i++) {
-    try { await verifyBeacon(binding.origin, binding.instance); break; }
-    catch (error) { if (i === 9) throw error; await sleep(2000); }
+export async function waitForBeacon(binding, { verify = verifyBeacon, now = () => performance.now(), wait = sleep } = {}) {
+  const deadline = now() + 100_000;
+  for (;;) {
+    try { await verify(binding.origin, binding.instance); return; }
+    catch (error) {
+      const remaining = deadline - now();
+      if (remaining <= 0) throw error;
+      await wait(Math.min(2500, remaining));
+    }
   }
+}
+async function ready(binding) {
+  await waitForBeacon(binding);
   const probe = await fetch(binding.origin + '/api/state', { credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(10000) });
   await probe.body?.cancel();
   if (probe.status !== 401) throw new Error('Anonymous access was not rejected as expected; refusing publication.');
@@ -98,7 +106,7 @@ async function main() {
       let advertised;
       try { advertised = destination(pointer.previous); } catch { advertised = null; }
       const matches = !!initial.active && advertised === initial.origin && pointer.previous.instance === initial.instance;
-      console.log(JSON.stringify({ local: !initial.stopped, passwordConfigured: !!initial.configured,
+      console.log(JSON.stringify({ local: !initial.stopped,
         tunnel: initial.active ? initial.origin : null, launcher: pagesUrl, publishedCurrent: matches,
         expiresAt: matches ? new Date(pointer.previous.expiresAt).toISOString() : null }));
       return;
@@ -116,7 +124,9 @@ async function main() {
         previous.status !== 'online' || previous.expiresAt <= now + 60 * 60_000 || destination(previous, now) !== binding.origin) {
       pointer.write({ version: 2, status: 'online', origin: binding.origin, instance: binding.instance, issuedAt: now, expiresAt: now + leaseMs });
     }
-    console.log(`Full Clip Studio: ${pagesUrl} (${initial.configured ? 'owner sign-in required' : 'locked until the owner sets a password locally'}).`);
+    console.log(`Full Clip Studio: ${pagesUrl} (sign up or sign in with a studio email and password).`);
   } finally { if (lock.listening) lock.close(); }
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => { console.error(error.message); process.exitCode = 1; });
+}

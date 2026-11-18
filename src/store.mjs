@@ -72,6 +72,14 @@ export class Store {
         owner TEXT NOT NULL, resource_id TEXT NOT NULL, PRIMARY KEY(owner, resource_id)
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS studio_users (
+        email TEXT PRIMARY KEY, salt TEXT NOT NULL, password_hash TEXT NOT NULL, created INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS activity (
+        id INTEGER PRIMARY KEY, created INTEGER NOT NULL, email TEXT, action TEXT NOT NULL,
+        resource TEXT, job_id TEXT, status INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS activity_job ON activity(job_id) WHERE job_id IS NOT NULL;
     `);
     if (!this.get('SELECT id FROM workspaces LIMIT 1')) {
       this.run('INSERT INTO workspaces VALUES (?,?,?,?)', id(), 'My studio', 'Independent creator', now());
@@ -92,11 +100,17 @@ export class Store {
   setSetting(key, value) {
     this.run('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, json(value));
   }
+  recordAction(email, action, resource = null, status = null) {
+    return this.run('INSERT INTO activity(created,email,action,resource,status) VALUES (?,?,?,?,?)',
+      now(), email, action, resource, status).lastInsertRowid;
+  }
   recover() {
     this.tx(() => {
+      this.run("DELETE FROM settings WHERE key='remoteOwnerPassword'");
       this.run("UPDATE jobs SET state='interrupted', error='Server restarted; start a new attempt explicitly.', finished=? WHERE state IN ('queued','running')", now());
       this.run("UPDATE publications SET state='uncertain', error='Server restarted during dispatch. Reconcile; do not blindly retry.' WHERE state='dispatching'");
       this.run("UPDATE live_sessions SET state='interrupted', error='Server restarted. Capture was not resumed.' WHERE state='recording'");
+      this.run('UPDATE activity SET status=0 WHERE status IS NULL');
       // Stale leases deliberately survive crashes: an orphaned encoder may still be reading its buffers.
     });
   }

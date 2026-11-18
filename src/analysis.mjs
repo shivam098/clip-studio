@@ -9,6 +9,8 @@ export function modelEndpoint(value) {
   return { url: url.href, local };
 }
 
+export const modelCredentialKey = endpoint => `ai:${modelEndpoint(endpoint).url}`;
+
 export async function suggestions(segments, duration, config, token, signal, fetcher = fetch) {
   if (!config) return { method: 'Local text heuristic (not AI)', moments: selectMoments(segments, duration) };
   if (!segments.length) throw new Error('Transcribe or enter captions before model-based selection');

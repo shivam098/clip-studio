@@ -6,19 +6,33 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { OwnerAccess } from '../src/remote-auth.mjs';
+import { StudioAccess } from '../src/remote-auth.mjs';
 import { Store } from '../src/store.mjs';
 import { Uploads } from '../src/uploads.mjs';
 import { destination, verifyBeacon, pagesOrigin, beacon, leaseMs, offline } from '../launcher/policy.mjs';
+import { waitForBeacon } from '../scripts/remote.mjs';
 
 const origin = 'https://test-studio.trycloudflare.com', instance = 'af'.repeat(16);
 const fixture = { origin, instance };
-test('isolated tunnel listener locks without a password, authenticates the exact origin, revokes sessions, and never grants local setup', async () => {
-  const store = new Store(':memory:'), auth = new OwnerAccess(store);
+test('a late-resolving issued hostname gets at least 90 seconds to verify; permanent failure is bounded', async () => {
+  let elapsed = 0, available = true;
+  const delayed = new Error('DNS not ready');
+  const options = { now: () => elapsed, wait: async delay => { elapsed += delay; }, verify: async (target, expected) => {
+    assert.equal(target, origin); assert.equal(expected, instance);
+    if (!available || elapsed < 92_000) throw delayed;
+  } };
+  await waitForBeacon(fixture, options);
+  assert.ok(elapsed >= 92_000 && elapsed < 100_000);
+  elapsed = 0; available = false;
+  await assert.rejects(waitForBeacon(fixture, options), error => error === delayed);
+  assert.equal(elapsed, 100_000);
+});
+test('one form registers a new email, authenticates a returning account and records the session actor', async () => {
+  const store = new Store(':memory:'), auth = new StudioAccess(store);
   let active = true;
   const server = createServer(async (req,res) => {
     const session = await auth.gate(req,res,fixture,() => active);
-    if (session) res.end(JSON.stringify({ csrf: session.csrf }));
+    if (session) res.end(JSON.stringify({ csrf: session.csrf, email: session.email }));
   });
   await new Promise(ok => server.listen(0,'127.0.0.1',ok));
   // Node's native http client preserves the supplied Host for the simulated tunnel ingress.
@@ -29,23 +43,25 @@ test('isolated tunnel listener locks without a password, authenticates the exact
       let text=''; res.on('data',chunk => text+=chunk); res.on('end',()=>ok({status:res.statusCode,headers:res.headers,text}));
     }); req.once('error',fail); req.end(body);
   });
-  const password = randomBytes(24).toString('hex');
-  const login = (value, site = origin) => send('/auth/login','POST',{Origin:site,'Content-Type':'application/x-www-form-urlencoded'},new URLSearchParams({password:value}).toString());
+  const email = 'fixture@example.invalid', password = randomBytes(24).toString('hex'), wrong = 'not-the-fixture-password';
+  const login = (value, site = origin, address = email) => send('/auth/login','POST',{Origin:site,'Content-Type':'application/x-www-form-urlencoded'},new URLSearchParams({email:address,password:value}).toString());
   try {
     const locked = await send('/');
-    assert.match(locked.text,/cannot be set here/);
+    assert.match(locked.text,/name="email"/);
+    assert.match(locked.text,/name="password"/);
+    assert.doesNotMatch(locked.text,/set the owner password/i);
     assert.equal(locked.headers['referrer-policy'],'same-origin');
     assert.equal((await send('/api/state')).status,401);
     assert.equal((await send('/api/remote/password','POST',{Origin:origin})).status,401);
-    const pw = await auth.set(password, null);
-    assert.ok(!JSON.stringify(auth.current()).includes(password));
     assert.equal((await login(password,'https://different.example')).status,403);
     assert.equal((await login(password,'null')).status,403);
-    assert.equal((await login('wrong')).status,401);
+    assert.equal((await login('short')).status,400);
+    assert.equal(store.get('SELECT COUNT(*) AS n FROM studio_users').n,0);
     const success = await login(password); assert.equal(success.status,303);
+    assert.ok(!JSON.stringify(store.get('SELECT * FROM studio_users')).includes(password));
     const set = success.headers['set-cookie'][0]; assert.match(set, /Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Strict$/);
     const Cookie = set.split(';')[0], session = JSON.parse((await send('/api/state','GET',{Cookie})).text);
-    assert.ok(session.csrf);
+    assert.ok(session.csrf); assert.equal(session.email,email);
     const write = {Cookie,Origin:origin,'X-Studio-Token':session.csrf};
     assert.equal((await send('/api/remote/password','POST',write)).status,403);
     assert.equal((await send('/api/shutdown','POST',write)).status,403);
@@ -59,12 +75,28 @@ test('isolated tunnel listener locks without a password, authenticates the exact
     assert.equal((await send('/api/state','GET',{Cookie,Origin:pagesOrigin})).status,403);
     assert.equal((await send('/auth/logout','POST',write)).status,200);
     assert.equal((await send('/api/state','GET',{Cookie})).status,401);
-    for(let i=0;i<5;i++) assert.equal((await login('wrong')).status,401);
+    assert.equal((await login(password,origin,email.toUpperCase())).status,303);
+    assert.equal(store.get('SELECT COUNT(*) AS n FROM studio_users').n,1);
+    assert.deepEqual(store.all('SELECT email,action FROM activity ORDER BY id').map(({email,action})=>[email,action]), [
+      [email,'Created studio account'],[email,'Signed in'],[email,'Signed out'],[email,'Signed in'],
+    ]);
+    assert.equal((await login(password,origin,'second@example.invalid')).status,303);
+    for(let i=0;i<4;i++) assert.equal((await login(wrong)).status,401);
     assert.equal((await login(password)).status,429);
-    await auth.set(null,pw.revision);
-    assert.equal((await login(password)).status,403);
     active=false; assert.equal((await send(beacon)).status,403);
   } finally { server.closeAllConnections(); await new Promise(ok=>server.close(ok)); store.close(); }
+});
+
+test('concurrent first visits to one email never replace the first password or create two accounts', async () => {
+  const store = new Store(':memory:'), auth = new StudioAccess(store), email = 'race@example.invalid';
+  try {
+    const passwords = [randomBytes(20).toString('hex'), randomBytes(20).toString('hex')];
+    const results = await Promise.all(passwords.map(p => auth.registerOrLogin(email,p,()=>true)));
+    assert.equal(results.filter(Boolean).length,1);
+    assert.equal(store.get('SELECT COUNT(*) AS n FROM studio_users').n,1);
+    assert.equal(await auth.registerOrLogin(email,passwords[results.indexOf(false)],()=>true),false);
+    assert.equal(await auth.registerOrLogin(email,passwords[results.indexOf(true)],()=>true),true);
+  } finally { store.close(); }
 });
 
 test('chunk uploads bind ownership, validate offsets, and admit only complete verified bytes', async () => {

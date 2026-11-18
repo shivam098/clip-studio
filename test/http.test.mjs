@@ -5,7 +5,50 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { randomBytes } from 'node:crypto';
 import { createApp } from '../src/server.mjs';
+
+test('the full shared API records the authenticated account, not an email supplied in the action', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clip-email-audit-'));
+  const hostname = 'fixture.trycloudflare.com', origin = `https://${hostname}`;
+  let dispatch;
+  const app = await createApp({ root, port: 0, makeTunnel: (_, handler) => {
+    dispatch = handler; return { status: () => ({ active: false }), change: async () => ({ active: false }) };
+  } });
+  const remote = http.createServer((req,res) => dispatch(req,res,{binding:{origin,instance:'ef'.repeat(16)},active:()=>true}));
+  await new Promise(resolve => remote.listen(0,'127.0.0.1',resolve));
+  const send = (path, method, headers = {}, body = '') => new Promise((resolve,reject) => {
+    const req = http.request({ hostname:'127.0.0.1', port:remote.address().port, path, method,
+      headers:{host:hostname,origin,...headers} }, res => {
+      let text=''; res.on('data',part=>text+=part); res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,text}));
+    }); req.once('error',reject); req.end(body);
+  });
+  const email='one-fixture@example.invalid', password=randomBytes(24).toString('hex');
+  try {
+    assert.equal((await send('/api/state','GET')).status,401);
+    const signed=await send('/auth/login','POST',{'content-type':'application/x-www-form-urlencoded'},new URLSearchParams({email,password}).toString());
+    assert.equal(signed.status,303);
+    const Cookie=signed.headers['set-cookie'][0].split(';')[0];
+    const state=JSON.parse((await send('/api/state','GET',{Cookie})).text);
+    assert.deepEqual(state.access,{remote:true,email});
+    const write={Cookie,'Content-Type':'application/json','X-Studio-Token':state.token};
+    const created=await send('/api/workspaces','POST',write,JSON.stringify({name:'Shared fixture',creator:'Fixture',email:'other@example.invalid'}));
+    assert.equal(created.status,201);
+    const workspace=JSON.parse(created.text).id;
+    const bad=await send('/api/clips','POST',write,'{}');
+    assert.equal(bad.status,400);
+    const local=await(await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`)).json();
+    assert.deepEqual(local.access,{remote:false});
+    assert.ok(local.workspaces.some(w=>w.id===workspace));
+    const audit=local.activity.find(row=>row.resource===workspace);
+    assert.deepEqual([audit.email,audit.action,audit.status],[email,'Created workspace',201]);
+    assert.ok(local.activity.some(row=>row.email===email && row.action==='Created clip draft' && row.status===400));
+    const output=JSON.stringify(local.activity);
+    for (const secret of [state.token,password,Cookie,'other@example.invalid']) assert.ok(!output.includes(secret));
+    assert.equal((await send('/auth/logout','POST',write)).status,200);
+    assert.equal((await send('/api/state','GET',{Cookie})).status,401);
+  } finally { remote.closeAllConnections(); await new Promise(resolve=>remote.close(resolve)); await app.close(); await rm(root,{recursive:true,force:true}); }
+});
 
 test('actual HTTP app serves UI, gates mutations and defaults all egress off', async () => {
   const root = await mkdtemp(join(tmpdir(), 'clip-http-'));
@@ -23,6 +66,25 @@ test('actual HTTP app serves UI, gates mutations and defaults all egress off', a
     const headers = { 'X-Studio-Token': state.token, 'Content-Type': 'application/json' };
     const workspace = await fetch(`${url}/api/workspaces`, { method: 'POST', headers, body: JSON.stringify({ name: 'Creator A', creator: 'A' }) });
     assert.equal(workspace.status, 201);
+    const createdId = (await workspace.json()).id;
+    const refreshed = await (await fetch(`${url}/api/state`)).json();
+    assert.equal(refreshed.access.remote, false);
+    const event = refreshed.activity.find(a => a.action === 'Created workspace');
+    assert.equal(event.email, null);
+    assert.equal(event.resource, createdId);
+    assert.equal(event.status, 201);
+    assert.ok(!JSON.stringify(refreshed.activity).includes(state.token));
+    const configure = async (endpoint, token) => {
+      const r = await fetch(`${url}/api/settings`, { method:'POST', headers,
+        body: JSON.stringify({ ai: { endpoint, model:'fixture', enabled:false, token } }) });
+      assert.equal(r.status, 200);
+      return (await (await fetch(`${url}/api/state`)).json()).settings.aiCredential;
+    };
+    const first = 'https://first.example.invalid/v1/chat/completions';
+    const other = 'https://second.example.invalid/v1/chat/completions';
+    assert.equal(await configure(first, 'synthetic-only-fixture-key'), true);
+    assert.equal(await configure(other, ''), false);
+    assert.equal(await configure(first, ''), true);
     assert.equal((await fetch(`${url}/api/import`, { method: 'POST', headers, body: JSON.stringify({ workspaceId: state.workspaces[0].id, url: 'https://youtube.com/watch?v=x' }) })).status, 400);
     const badClip = await fetch(`${url}/api/clips`, { method: 'POST', headers, body: '{}' });
     assert.equal(badClip.status, 400);

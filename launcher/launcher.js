@@ -16,7 +16,7 @@ async function check() {
     }
     await verifyBeacon(origin, pointer.instance);
     state.textContent = 'Opening Clip Studio';
-    detail.textContent = 'Continuing to your full studio. Owner sign-in is required on a new device.';
+    detail.textContent = 'Continuing to the shared studio. Use your email and a studio password to sign up or sign in.';
     open.href = origin + '/'; open.hidden = false;
     location.replace(open.href);
   } catch {

@@ -90,10 +90,8 @@ function privacyOptions() {
   setMarkup('#publish-privacy', '<option value="">Select visibility</option>' + options.map(option => `<option>${option}</option>`).join(''));
 }
 function draw() {
-  $('#owner-form').classList.toggle('hidden', state.access.remote);
   $('#remote-session').classList.toggle('hidden', !state.access.remote);
-  $('#owner-status').textContent = state.access.configured ? 'An owner password is set. Changing it signs out every remote device.' : 'No owner password is set. Remote access is locked.';
-  $('#owner-clear').disabled = !state.access.configured;
+  $('#session-email').textContent = state.access.email ?? '';
   selectOptions('#workspace', state.workspaces, w => w.name);
   $('#workspace').value = workspaceId;
   const recoveries = state.jobs.filter(job => job.resource_id === workspaceId && job.recovery);
@@ -122,7 +120,10 @@ function draw() {
     lastSuggestions = analysis?.id;
     setMarkup('#suggestions', analysis ? `<p class="muted">${escape(analysis.result.method)}</p>${analysis.result.moments.map((m, i) => `<div class="moment"><button class="secondary" data-moment="${i}" data-analysis="${analysis.id}">${seconds(m.start)}–${seconds(m.end)} · ${escape(m.title)}</button><p>${escape(m.reason)}</p></div>`).join('')}` : '');
   }
-  setMarkup('#jobs', state.jobs.slice(0, 12).map(j => `<div class="list-row"><div><strong>${escape(j.type)} <span class="state ${escape(j.state)}">${escape(j.state)}</span></strong><p>${escape(j.error ?? (j.state === 'running' ? 'Working locally; you can keep editing.' : new Date(j.created).toLocaleTimeString()))}</p></div>${['queued','running'].includes(j.state) ? `<button class="danger" data-cancel="${j.id}">Cancel</button>` : ''}</div>`).join('') || '<p class="muted">No jobs yet. Your next step is above.</p>');
+  setMarkup('#jobs', state.jobs.slice(0, 12).map(j => `<div class="list-row"><div><strong>${escape(j.type)} <span class="state ${escape(j.state)}">${escape(j.state)}</span></strong><p>${escape(j.actor ?? 'Attribution not recorded')} · ${escape(j.error ?? (j.state === 'running' ? 'Working locally; you can keep editing.' : new Date(j.created).toLocaleTimeString()))}</p></div>${['queued','running'].includes(j.state) ? `<button class="danger" data-cancel="${j.id}">Cancel</button>` : ''}</div>`).join('') || '<p class="muted">No jobs yet. Your next step is above.</p>');
+  setMarkup('#activity', state.activity.map(a => `<div class="list-row"><div><strong>${escape(a.action)}</strong>
+    <p>${escape(a.email ?? 'This PC')} · ${escape(new Date(a.created).toLocaleString())} · ${a.status == null ? 'In progress' : a.status === 0 ? 'Interrupted' : a.status >= 400 ? `Not completed (${a.status})` : 'OK'}${a.resource ? ` · ${escape(a.resource)}` : ''}</p>
+    </div></div>`).join('') || '<p class="muted">No actions recorded yet.</p>');
   setMarkup('#live-list', state.live.filter(s => s.workspace_id === workspaceId).map(s => `<div class="list-row"><div><strong>${escape(s.name)} <span class="state">${escape(s.state)}</span></strong><p>${state.segments.filter(segment => segment.session_id === s.id).length} completed buffers in library. ${escape(s.error ?? '')}</p></div><div class="buttons">${s.state === 'recording' ? `<button class="danger" data-live-stop="${s.id}">Stop capture</button>` : `<button class="secondary" data-cleanup="${s.id}">Delete unused buffers</button>`}<button class="secondary" data-latest="${s.id}">Review latest segment</button></div></div>`).join(''));
   $('#publishing-toggle').textContent = state.settings.publishingEnabled ? 'Pause dispatch' : 'Enable dispatch';
   setMarkup('#accounts', state.accounts.map(a => `<div class="list-row"><div><strong>${escape(a.name)} · ${escape(a.platform)}</strong><p>${a.verified ? `Verified: ${escape(a.display_name)} · ${escape(a.remote_id)}` : 'Identity not verified'}</p><p>${a.enabled ? 'Enabled' : 'Disabled'} · ${a.spacing / 60} min spacing · ${a.daily_cap} per rolling 24h · token ${a.credential ? 'saved' : 'missing'}</p></div><div class="buttons"><button class="secondary" data-account-verify="${a.id}">Verify account</button><button class="secondary" data-account-toggle="${a.id}">${a.enabled ? 'Disable' : 'Enable'}</button><button class="secondary" data-account-limits="${a.id}">Edit limits</button><button class="secondary" data-account-token="${a.id}">Replace token</button></div></div>`).join(''));
@@ -246,16 +247,6 @@ action('#ai-form', async () => {
   $('#ai-token').value = ''; notify('Model configuration saved. No transcript was sent.');
 }, 'submit');
 action('#diagnostics', async () => { $('#diagnostic-result').textContent = JSON.stringify(await api('/api/diagnostics', null, 'GET'), null, 2); });
-action('#owner-form', async () => {
-  const password = $('#owner-password').value;
-  if (password !== $('#owner-confirm').value) throw new Error('Passwords do not match.');
-  await api('/api/remote/password', { password, revision: state.access.revision });
-  $('#owner-form').reset(); notify('Owner password saved. Use the Pages bookmark to sign in on another device.');
-}, 'submit');
-action('#owner-clear', async () => {
-  if (!confirm('Lock remote access and sign out all devices?')) return;
-  await api('/api/remote/password', { password: null, revision: state.access.revision }); $('#owner-form').reset(); notify('Remote access locked.');
-});
 action('#remote-logout', async () => { await api('/auth/logout'); location.replace('/'); });
 document.addEventListener('click', async event => {
   const button = event.target.closest('button');

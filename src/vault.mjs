@@ -10,6 +10,13 @@ export class Vault {
   constructor(root) { this.file = join(root, 'credentials.json'); }
   entries() { return existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : {}; }
   has(key) { return !!this.entries()[key]; }
+  moveIfPresent(from, to) {
+    const entries = this.entries();
+    if (!entries[from]) return;
+    entries[to] ??= entries[from];
+    delete entries[from];
+    writeJsonAtomic(this.file, entries);
+  }
   async put(key, secret) {
     let value = secret;
     if (process.platform === 'win32') {

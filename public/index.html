@@ -25,7 +25,7 @@
       <div class="workspace-picker"><label for="workspace">Workspace</label><select id="workspace"></select><button class="quiet" id="new-workspace">+ New</button></div>
     </header>
     <div id="notice" role="status" aria-live="polite"></div>
-    <div id="remote-session" class="hidden"><span>Connected to your full studio over Cloudflare.</span> <button class="quiet" id="remote-logout">Sign out</button></div>
+    <div id="remote-session" class="hidden"><span>Signed in as <strong id="session-email"></strong></span> <button class="quiet" id="remote-logout">Sign out</button></div>
     <section id="studio" class="page">
       <div class="hero"><div><p class="eyebrow">FROM LONG-FORM TO ONE GOOD IDEA</p><h2>A small studio.<br>A shorter story.</h2><p>Bring a video, find a moment, make it yours.<br>Review everything before it leaves your machine.</p></div><div class="hero-right"><div class="aspect-demo"><span>9:16</span><strong>YOUR NEXT<br>GREAT CLIP</strong><i>captions included</i></div></div></div>
       <div class="section-title"><h2>Source library</h2><button id="demo" class="quiet">Create synthetic demo</button></div>
@@ -107,24 +107,20 @@
         <article class="panel"><h3>Stored on the studio PC</h3><p>Uploaded video, extracted speech, transcripts, caption edits, renders, live buffers and the SQLite job database are stored on the studio PC. Speech uses an installed faster-whisper model in offline mode. Models are never downloaded during transcription.</p><p>No analytics, external fonts, automatic uploads or folder scanning. With remote access enabled, Cloudflare carries the connection between your browser and this PC, including sign-in, media, transcripts and any provider credentials you enter. GitHub Pages serves only the public launcher.</p></article>
         <article class="panel"><h3>Leaves only when requested</h3><p>URL import/live capture contacts the source platform (IP and source URL visible there). Configured remote AI receives transcript text, not video, audio or images, after per-run approval. Publishing sends the selected video, text and credentials to the selected platform.</p><p>No remote transcription or frame-analysis feature exists in this build. A provider's own retention policy applies to data you send.</p></article>
       </div>
-      <form id="owner-form" class="panel compact hidden">
-        <h3>Remote access</h3><p id="owner-status"></p><p>Only this localhost console can set or clear the owner password. Use a unique password. Anyone signed in has the same library and publishing controls as you.</p>
-        <label for="owner-password">New studio password</label><input id="owner-password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
-        <label for="owner-confirm">Confirm password</label><input id="owner-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
-        <div class="button-row"><button type="submit">Set owner password</button><button type="button" class="secondary" id="owner-clear">Clear password and lock access</button></div>
-      </form>
       <form id="ai-form" class="panel compact">
         <h3>Optional moment-selection model</h3><p>OpenAI-compatible chat-completions endpoint. Local Ollama/LM Studio can keep text local; remote HTTPS requires your consent. No endpoint is preconfigured.</p>
         <label for="ai-endpoint">Complete endpoint URL</label><input id="ai-endpoint" type="url" placeholder="http://127.0.0.1:11434/v1/chat/completions" required>
         <label for="ai-model">Installed / provider model name</label><input id="ai-model" required>
-        <label for="ai-token">API key (optional; blank keeps the saved key)</label><input id="ai-token" type="password" autocomplete="off">
+        <label for="ai-token">API key (optional; blank keeps the key saved for this endpoint)</label><input id="ai-token" type="password" autocomplete="off">
         <label class="check"><input id="ai-enabled" type="checkbox"> Enable this model for explicit requests</label>
         <label class="check"><input id="ai-consent" type="checkbox"> If remote, I approve transcript processing at this endpoint. I will also approve each run.</label>
         <button type="submit">Save model configuration</button>
       </form>
       <div class="panel"><h3>Local runtime</h3><p id="runtime"></p><button id="diagnostics" class="secondary">Check dependencies</button><pre id="diagnostic-result"></pre><p>See the repository README for model installation, token scopes, start/stop, retention and current integration limits. Data is retained until you remove it; uninstalling the app does not erase the data directory.</p></div>
     </section>
-    <section class="jobs-section"><div class="section-title"><h2>Activity</h2><span id="connection" class="tag">Connecting</span></div><div id="jobs"></div></section>
+    <section class="jobs-section"><div class="section-title"><h2>Activity</h2><span id="connection" class="tag">Connecting</span></div>
+      <h3>Jobs</h3><div id="jobs"></div><h3>Recent actions</h3>
+      <p class="muted">Actions show the signed-in email or “This PC” for localhost. Emails are self-reported, not verified.</p><div id="activity"></div></section>
     <footer>Built independently for creators who want control. Local-first, not a hosted service.</footer>
   </main>
   <dialog id="workspace-dialog"><form id="workspace-form"><h2>New workspace</h2><label for="workspace-name">Workspace name</label><input id="workspace-name" required><label for="creator-name">Creator name</label><input id="creator-name" required><div class="button-row"><button type="submit">Create workspace</button><button id="dismiss-workspace" type="button" class="secondary">Cancel</button></div></form></dialog>
