@@ -35,7 +35,11 @@ In a second terminal at the same installed directory, use the **exact printed or
 node .\operator.mjs online <origin>
 ```
 
-The command rechecks both loopback and HTTPS health, compares the public instance IDs and checks Pages CORS before writing. It uses only the stored `shivam098` login for `github.com`, without switching sign-in, and compare-and-swaps **`gh-pages:link.json` only**. No repository checkout is required. The online record has `version:1`, `status:"online"`, `origin`, and integer UTC Unix milliseconds `issuedAt` / `expiresAt`, at most six hours apart. Rerun `online` deliberately to renew. The launcher rejects unknown fields, expired/future records, noncanonical hosts, redirects, oversized documents and an incorrect health response. It rechecks on **Open editor**. Quick Tunnels are temporary; availability depends on this PC and network.
+The command rechecks both loopback and HTTPS health, compares the public instance IDs and checks Pages CORS before writing. It uses only the stored `shivam098` login for `github.com`, without switching sign-in, and compare-and-swaps **`gh-pages:link.json` only**. No repository checkout is required. The online record has `version:1`, `status:"online"`, `origin`, and integer UTC Unix milliseconds `issuedAt` / `expiresAt`, at most six hours apart. The launcher rejects unknown fields, expired/future records, noncanonical hosts, redirects, oversized documents and an incorrect health response. It rechecks on **Open editor**. Quick Tunnels are temporary; availability depends on this PC and network.
+
+To keep **this already-published connection** available past six hours, run `node .\operator.mjs keep-online` from the installed directory. Leave the keeper running. It adopts the existing pin without opening a tunnel or rebuilding Pages if more than an hour remains. Within the final hour it rechecks the published record, current boot ID and public health, then changes **only the timestamps**. Transient renewal failures back off. An offline, expired or different record cannot be renewed, and revoking the local pin stops the keeper. Ctrl+C stops renewals only; use `offline` to revoke access immediately.
+
+This is not sign-in automation. There is no scheduled task. After sign-out, reboot, a stopped tunnel or a changed address, start and approve a new share as above. The keeper never starts processes to restore a tunnel or switches to another public address.
 
 ## Stop or rotate
 

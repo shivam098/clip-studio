@@ -7,7 +7,44 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createEditor } from '../server.mjs';
+import { checkLease } from '../operator.mjs';
 import { destination, isQuickOrigin, leaseMs, pagesOrigin, readSmallJson, signature } from '../pages/link-policy.js';
+
+test('lease keeper adopts without a write, renews only timestamps near expiry, then skips another build', async () => {
+  const binding = { origin: 'https://test-clip.trycloudflare.com', instance: 'test-boot' };
+  const issuedAt = 1000000000;
+  const original = { version: 1, status: 'online', origin: binding.origin, issuedAt, expiresAt: issuedAt + leaseMs };
+  let published = original, at = issuedAt, writes = 0, checks = 0;
+  const ops = {
+    now: () => at, verify: async value => { assert.deepEqual(value, binding); checks++; },
+    read: () => ({ text: JSON.stringify(published), replace(next) { writes++; published = next; } }),
+  };
+  assert.equal((await checkLease(binding, ops)).renewed, false);
+  assert.equal(writes, 0);
+  at = original.expiresAt - 59 * 60000;
+  assert.equal((await checkLease(binding, ops)).renewed, true);
+  assert.deepEqual(published, { ...original, issuedAt: at, expiresAt: at + leaseMs });
+  assert.equal((await checkLease(binding, ops)).renewed, false);
+  assert.equal(writes, 1); assert.equal(checks, 3);
+});
+
+test('lease keeper cannot republish an expired, offline, replaced, or unverified share', async () => {
+  const origin = 'https://test-clip.trycloudflare.com', at = 1000000000, binding = { origin, instance: 'test-boot' };
+  const online = { version: 1, status: 'online', origin, issuedAt: at - 60000, expiresAt: at + 1000 };
+  let writes = 0;
+  const attempt = (pointer, verify, now = () => at) => checkLease(binding, { now, verify,
+    read: () => ({ text: JSON.stringify(pointer), replace() { writes++; } }),
+  });
+  const noProbe = () => assert.fail('Unexpected probe');
+  for (const bad of [{ version: 1, status: 'offline' }, { ...online, origin: 'https://other.trycloudflare.com' },
+    { ...online, expiresAt: at }, { ...online, extra: true }]) {
+    await assert.rejects(attempt(bad, noProbe), /lease changed, expired, or went offline/);
+  }
+  await assert.rejects(attempt(online, async () => { throw new Error('Public health failed'); }), /Public health failed/);
+  let time = at;
+  await assert.rejects(attempt(online, async () => { time = online.expiresAt; }, () => time), /lease changed, expired, or went offline/);
+  assert.equal(writes, 0);
+});
 
 test('only an exact HTTPS Quick Tunnel origin in a current bounded lease can be opened', () => {
   const origin = 'https://desk-green.trycloudflare.com', now = 1000000000;

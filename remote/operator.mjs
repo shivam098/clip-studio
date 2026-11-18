@@ -3,8 +3,9 @@ import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
-import { isEditor, isQuickOrigin, leaseMs, pagesOrigin, readSmallJson } from './pages/link-policy.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { destination, isEditor, isQuickOrigin, leaseMs, pagesOrigin, readSmallJson } from './pages/link-policy.js';
 
 const local = 'http://127.0.0.1:4319', repo = 'repos/shivam098/clip-studio', pointerPath = `${repo}/contents/link.json`;
 const pinFile = new URL('./state/pin.json', import.meta.url);
@@ -107,17 +108,7 @@ function ownerApi() {
   if (!env.GH_TOKEN || api('user').login !== 'shivam098') throw new Error('The required GitHub owner is not available.');
   return api;
 }
-async function publish(origin) {
-  const pointer = { version: 1, status: origin ? 'online' : 'offline' };
-  if (origin) {
-    const instance = await probe(local), pin = JSON.parse(readFileSync(pinFile, 'utf8'));
-    if (pin?.instance !== instance || pin.origin !== origin) throw new Error('The exact tunnel is not pinned to this running editor.');
-    await probe(origin, instance);
-    const issuedAt = Date.now();
-    Object.assign(pointer, { origin, issuedAt, expiresAt: issuedAt + leaseMs });
-  } else {
-    writePin({}); // Revocation must not depend on GitHub being reachable.
-  }
+function launcherRecord() {
   const api = ownerApi(), pages = api(`${repo}/pages`);
   if (pages.html_url !== pagesOrigin + '/clip-studio/' || pages.cname ||
       pages.build_type !== 'legacy' || pages.source?.branch !== 'gh-pages' || pages.source?.path !== '/') {
@@ -125,25 +116,115 @@ async function publish(origin) {
   }
   const file = api(pointerPath + '?ref=gh-pages');
   if (file.type !== 'file' || file.path !== 'link.json' || file.size > 1024 || !/^[a-f0-9]{40}$/.test(file.sha)) throw new Error('Unexpected pointer file.');
-  const content = JSON.stringify(pointer) + '\n';
-  if (Buffer.from(file.content, 'base64').toString('utf8').trim() !== content.trim()) {
-    const owner = { name: 'shivam098', email: '39924466+shivam098@users.noreply.github.com' };
-    if (origin && JSON.parse(readFileSync(pinFile, 'utf8'))?.origin !== origin) throw new Error('Public pin changed; refusing to publish.');
-    api(pointerPath, { branch: 'gh-pages', sha: file.sha, author: owner, committer: owner,
-      message: `Set public editor ${pointer.status}\n\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>`,
-      content: Buffer.from(content).toString('base64') });
+  const text = Buffer.from(file.content, 'base64').toString('utf8');
+  return {
+    text,
+    replace(pointer) {
+      const content = JSON.stringify(pointer) + '\n';
+      if (text.trim() === content.trim()) return;
+      const owner = { name: 'shivam098', email: '39924466+shivam098@users.noreply.github.com' };
+      api(pointerPath, { branch: 'gh-pages', sha: file.sha, author: owner, committer: owner,
+        message: `Set public editor ${pointer.status}\n\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>`,
+        content: Buffer.from(content).toString('base64') });
+    },
+  };
+}
+
+class ShareEnded extends Error {}
+function readBinding() {
+  let pin;
+  try { pin = JSON.parse(readFileSync(pinFile, 'utf8')); }
+  catch { throw new ShareEnded('No readable public pin; nothing renewed.'); }
+  if (!isQuickOrigin(pin?.origin) || typeof pin.instance !== 'string' || !uuid.test(pin.instance)) {
+    throw new ShareEnded('No active public pin; nothing renewed.');
   }
+  return { origin: pin.origin, instance: pin.instance };
+}
+function samePin(binding) {
+  const pin = readBinding();
+  if (pin.origin !== binding.origin || pin.instance !== binding.instance) throw new ShareEnded('Public pin changed; nothing renewed.');
+}
+async function checkBinding(binding) {
+  samePin(binding);
+  if (await probe(local) !== binding.instance) throw new ShareEnded('Editor instance changed; nothing renewed.');
+  await probe(binding.origin, binding.instance);
+  samePin(binding);
+}
+async function publish(origin) {
+  const pointer = { version: 1, status: origin ? 'online' : 'offline' };
+  let binding;
+  if (origin) {
+    binding = readBinding();
+    if (binding.origin !== origin) throw new Error('The exact tunnel is not pinned to this running editor.');
+    await checkBinding(binding);
+    const issuedAt = Date.now();
+    Object.assign(pointer, { origin, issuedAt, expiresAt: issuedAt + leaseMs });
+  } else {
+    writePin({}); // Revocation must not depend on GitHub being reachable.
+  }
+  const record = launcherRecord();
+  if (binding) samePin(binding);
+  record.replace(pointer);
   console.log(`Launcher record: ${pointer.status}. Pages deployment and caches can take a few minutes.`);
 }
 
-try {
+const hour = 3600000, checkMs = 5 * 60000;
+export async function checkLease(binding, { read = launcherRecord, verify = checkBinding, now = Date.now } = {}) {
+  const record = read();
+  let pointer;
+  function requireCurrent(at) {
+    try { if (destination(pointer, at) === binding.origin && isQuickOrigin(binding.origin)) return; }
+    catch { /* Invalid and expired records are never revived. */ }
+    throw new ShareEnded('The published lease changed, expired, or went offline; nothing renewed.');
+  }
+  try { pointer = JSON.parse(record.text); }
+  catch { throw new ShareEnded('The published lease is invalid; nothing renewed.'); }
+  requireCurrent(now());
+  await verify(binding);
+  const at = now();
+  requireCurrent(at);
+  if (pointer.expiresAt - at > hour) return { expiresAt: pointer.expiresAt, renewed: false };
+  const next = { ...pointer, issuedAt: at, expiresAt: at + leaseMs };
+  record.replace(next); // Compare-and-swap against the exact record read above.
+  return { expiresAt: next.expiresAt, renewed: true };
+}
+async function keepOnline() {
+  const binding = readBinding();
+  let { expiresAt } = await checkLease(binding);
+  console.log('Watching this live Clip Studio lease only. Ctrl+C stops renewal; the offline command stops sharing.');
+  let wait = checkMs;
+  while (Date.now() < expiresAt) {
+    await sleep(Math.min(wait, expiresAt - Date.now()));
+    if (Date.now() >= expiresAt) break;
+    samePin(binding);
+    if (expiresAt - Date.now() > hour) continue;
+    try {
+      const result = await checkLease(binding);
+      expiresAt = result.expiresAt;
+      wait = checkMs;
+      if (result.renewed) console.log('Renewed the current editor lease without changing the address.');
+    } catch (error) {
+      if (error instanceof ShareEnded) throw error;
+      wait = Math.min(wait * 2, 15 * 60000);
+      console.error('Could not verify or renew the current lease. No replacement tunnel will be opened.');
+    }
+  }
+  throw new ShareEnded('Lease expired. Renewal stopped.');
+}
+
+async function main() {
   const [action, origin, ...extra] = process.argv.slice(2);
   if (action === 'tunnel' && !origin) await tunnel();
   else if (action === 'online' && isQuickOrigin(origin) && !extra.length) await publish(origin);
+  else if (action === 'keep-online' && !origin) await keepOnline();
   else if (action === 'offline' && !origin) await publish(null);
-  else throw new Error('Use tunnel, online <exact HTTPS Quick Tunnel origin without slash>, or offline.');
-} catch (error) {
-  // Never emit CLI output, local paths, or request details.
-  console.error(error.code || error instanceof TypeError ? 'Editor operation failed. Check the installation, editor and network.' : error.message);
-  process.exitCode = 1;
+  else throw new Error('Use tunnel, online <exact HTTPS Quick Tunnel origin without slash>, keep-online, or offline.');
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try { await main(); }
+  catch (error) {
+    // Never emit CLI output, local paths, or request details.
+    console.error(error.code || error instanceof TypeError ? 'Editor operation failed. Check the installation, editor and network.' : error.message);
+    process.exitCode = 1;
+  }
 }
