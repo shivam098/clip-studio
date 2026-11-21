@@ -73,16 +73,17 @@ If dependencies are not on PATH, create `%LOCALAPPDATA%\ClipStudio\data\config.j
 
 The downloader explicitly uses the same Node executable as Clip Studio, rather than relying on yt-dlp's Deno-only default. `requirements-download.txt` includes yt-dlp's matching `yt-dlp-ejs` scripts through its `default` dependency group. Runtime downloading of extra JavaScript components is disabled. Install requirements with the Python interpreter configured above (prefer an app-specific virtual environment).
 
-**YouTube sign-in.** YouTube refuses anonymous downloads from many cloud and datacenter addresses ("Sign in to confirm you're not a bot"); on the studio PC every yt-dlp player client was refused this way. To import YouTube links there, add a YouTube sign-in in **Privacy & setup → YouTube sign-in for imports**:
+**YouTube sign-in.** YouTube refuses anonymous downloads from many cloud and datacenter addresses ("Sign in to confirm you're not a bot"); on the studio PC every yt-dlp player client was refused this way. To import YouTube links there, sign in once in **Privacy & setup → YouTube sign-in for imports**:
 
-1. Open a private browser window and sign in to YouTube with the account to use. A separate account is safest.
-2. Open youtube.com in that window and export its cookies with a cookies.txt (Netscape format) browser extension.
-3. Close the private window without signing out, so YouTube does not rotate the exported session.
-4. Choose the file under **Exported cookies.txt** and select **Save YouTube sign-in**.
+1. Select **Sign in to YouTube**. A browser window opens on the studio PC's screen at Google's YouTube sign-in page. It uses a fresh, separate profile, so your everyday browser and its sign-ins are untouched.
+2. Sign in there with the YouTube account to use. A separate account is safest.
+3. Clip Studio notices the sign-in, saves the youtube.com cookies, closes the window and deletes that temporary profile. The status shows **Signed in**. Every device, including the shared link, then imports with this sign-in.
 
-Only youtube.com cookies are kept, in the studio's credential store (Windows DPAPI for the current user). YouTube imports and YouTube live capture pass a temporary copy to yt-dlp with `--cookies`; cookies that YouTube rotates during a download are saved back, and the copy is deleted afterwards. Vimeo and Twitch never receive it. Clip Studio does not read browser profiles. Activity records who saved or removed the sign-in.
+The window uses Brave if installed, otherwise Chrome, Chromium or Edge; set `"signinBrowser"` in `config.json` to the path of another Chromium-based browser. Clip Studio reads the window's cookies through the browser's DevTools connection; it injects nothing into pages. Cancel closes the window; closing it yourself, or 15 minutes without a sign-in, ends the attempt. The window always opens on the studio PC, also when the button is selected through the shared link. **Other way: add a cookies.txt file** still accepts a youtube.com cookies.txt (Netscape format) export from a private browser window.
 
-Risks: YouTube may flag or suspend an account used for automated downloads; everyone who can use the studio, including anyone who signs up through the shared link, imports with this sign-in; cookies expire and must be re-added. If YouTube still refuses, **Source library** in the importing workspace offers **Add YouTube sign-in** (opens Privacy & setup), **Choose a video file** (adds an authorized local copy to the original workspace through the regular upload flow) and **Dismiss** (hides the prompt for that import, including after reload). Imports are never retried automatically.
+Only youtube.com cookies are kept, in the studio's credential store (Windows DPAPI for the current user). YouTube imports and YouTube live capture pass a temporary copy to yt-dlp with `--cookies`; cookies that YouTube rotates during a download are saved back, and the copy is deleted afterwards. Vimeo and Twitch never receive it. Clip Studio does not read your everyday browser profiles. Activity records who opened the sign-in window, signed in, saved or removed the sign-in.
+
+Risks: YouTube may flag or suspend an account used for automated downloads; everyone who can use the studio, including anyone who signs up through the shared link, imports with this sign-in; the sign-in eventually expires, and imports then ask you to sign in again. If YouTube refuses, **Source library** in the importing workspace offers **Sign in to YouTube** (opens the window directly), then **Import again** once you have signed in, plus **Choose a video file** (adds an authorized local copy to the original workspace through the regular upload flow) and **Dismiss** (hides the prompt for that import, including after reload). Imports are never retried automatically.
 
 Stop gracefully in another terminal:
 

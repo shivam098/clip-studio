@@ -107,15 +107,20 @@
         <article class="panel"><h3>Stored on the studio PC</h3><p>Uploaded video, extracted speech, transcripts, caption edits, renders, live buffers and the SQLite job database are stored on the studio PC. Speech uses an installed faster-whisper model in offline mode. Models are never downloaded during transcription.</p><p>No analytics, external fonts, automatic uploads or folder scanning. With remote access enabled, Cloudflare carries the connection between your browser and this PC, including sign-in, media, transcripts and any provider credentials you enter. GitHub Pages serves only the public launcher.</p></article>
         <article class="panel"><h3>Leaves only when requested</h3><p>URL import/live capture contacts the source platform (IP and source URL visible there; with a YouTube sign-in saved, YouTube also sees that account). Configured remote AI receives transcript text, not video, audio or images, after per-run approval. Publishing sends the selected video, text and credentials to the selected platform.</p><p>No remote transcription or frame-analysis feature exists in this build. A provider's own retention policy applies to data you send.</p></article>
       </div>
-      <form id="youtube-signin-form" class="panel compact">
+      <div id="youtube-signin-panel" class="panel compact">
         <h3>YouTube sign-in for imports</h3>
-        <p>YouTube refuses downloads from this cloud PC unless a YouTube account is signed in. Add a cookies.txt file exported from a browser where that account is signed in to YouTube. YouTube imports and YouTube live capture then use it.</p>
-        <p>A separate YouTube account is safest: YouTube may flag or suspend an account used for automated downloads, and everyone who can use this studio imports with this sign-in. Cookies expire; add a fresh file when imports ask again.</p>
+        <p>YouTube refuses downloads from this cloud PC unless a YouTube account is signed in. Select <strong>Sign in to YouTube</strong>: a browser window opens on the studio PC's screen. Sign in there; Clip Studio saves the sign-in by itself and closes the window. Every device then imports with it.</p>
         <p id="youtube-signin-status" aria-live="polite"></p>
-        <label for="youtube-cookies">Exported cookies.txt</label><input id="youtube-cookies" type="file" accept=".txt,text/plain" required>
-        <div class="button-row"><button type="submit">Save YouTube sign-in</button><button type="button" class="secondary" id="youtube-signin-remove">Remove sign-in</button></div>
-        <p class="muted">To export: open a private browser window, sign in to YouTube, open youtube.com, export its cookies with a cookies.txt (Netscape format) extension, then close the private window. Only youtube.com cookies are kept, in the studio's credential store.</p>
-      </form>
+        <div class="button-row"><button type="button" id="youtube-signin-start">Sign in to YouTube</button><button type="button" class="secondary hidden" id="youtube-signin-cancel">Cancel sign-in</button><button type="button" class="secondary" id="youtube-signin-remove">Remove sign-in</button></div>
+        <p class="muted">A separate YouTube account is safest: YouTube may flag or suspend an account used for automated downloads, and everyone who can use this studio imports with this sign-in. When an import asks again, sign in again.</p>
+        <details><summary>Other way: add a cookies.txt file</summary>
+          <form id="youtube-signin-form">
+            <label for="youtube-cookies">Exported cookies.txt</label><input id="youtube-cookies" type="file" accept=".txt,text/plain" required>
+            <button type="submit" class="secondary">Save cookies file</button>
+            <p class="muted">Export the cookies of youtube.com with a cookies.txt (Netscape format) extension from a private window where you are signed in to YouTube, then close that window. Only youtube.com cookies are kept, in the studio's credential store.</p>
+          </form>
+        </details>
+      </div>
       <form id="ai-form" class="panel compact">
         <h3>Optional moment-selection model</h3><p>OpenAI-compatible chat-completions endpoint. Local Ollama/LM Studio can keep text local; remote HTTPS requires your consent. No endpoint is preconfigured.</p>
         <label for="ai-endpoint">Complete endpoint URL</label><input id="ai-endpoint" type="url" placeholder="http://127.0.0.1:11434/v1/chat/completions" required>

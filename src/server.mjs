@@ -22,6 +22,7 @@ import { auditRequest, isResourceId } from './activity.mjs';
 import { Tunnel } from './tunnel.mjs';
 import { Uploads, maxVideo } from './uploads.mjs';
 import { YouTubeSignin } from './youtube-signin.mjs';
+import { YouTubeSigninWindow, findBrowser, openBrowser } from './youtube-browser.mjs';
 
 const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const limit = maxVideo;
@@ -84,7 +85,8 @@ async function mediaResponse(req, res, file, downloadName) {
 }
 
 export async function createApp({ root = dataDir, config = readConfig(root), port = 4318, providers = new Providers(), importVideo = download,
-  makeTunnel = (root, dispatch, revoke) => new Tunnel(root, dispatch, revoke) } = {}) {
+  makeTunnel = (root, dispatch, revoke) => new Tunnel(root, dispatch, revoke),
+  findSigninBrowser = () => findBrowser(config.signinBrowser), openSigninBrowser = openBrowser } = {}) {
   await mkdir(root, { recursive: true });
   const lockPath = join(root, 'server.lock');
   try {
@@ -136,6 +138,9 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
   }
   const signin = new YouTubeSignin(root, vault, store);
   await signin.init();
+  const signinWindow = new YouTubeSigninWindow(root, signin, { findExecutable: findSigninBrowser, open: openSigninBrowser,
+    onSaved: email => store.recordAction(email, 'Signed in to YouTube in the sign-in window', null, 200) });
+  await signinWindow.init();
   const live = new Live(store, leases, root, config, addAsset, (url, operation) => signin.use(url, operation));
   const uploads = new Uploads(root, addAsset);
   await uploads.init();
@@ -222,7 +227,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
               provider_ref: { phase: ref.phase, id: ref.videoId ?? ref.mediaId ?? ref.containerId ?? ref.publishId, hasSession: !!ref.session } }; }),
           settings: { publishingEnabled: store.setting('publishingEnabled', false),
             ai, aiCredential: !!ai && vault.has(modelCredentialKey(ai.endpoint)), model: config.model,
-            youtubeSignin: signin.status(),
+            youtubeSignin: { ...signin.status(), window: signinWindow.status() },
             storage: root, secrets: process.platform === 'win32' ? 'Windows DPAPI, current user' : 'Owner-readable credential file' },
         });
       }
@@ -429,6 +434,12 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
       if (req.method === 'POST' && url.pathname === '/api/youtube-signin/remove') {
         return send(res, 200, await signin.remove());
       }
+      if (req.method === 'POST' && url.pathname === '/api/youtube-signin/start') {
+        return send(res, 202, signinWindow.start(email));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/youtube-signin/cancel') {
+        return send(res, 200, await signinWindow.cancel());
+      }
       if (req.method === 'POST' && url.pathname === '/api/accounts') {
         const input = await body(req);
         if (!['youtube','instagram','tiktok'].includes(input.platform)) throw new Error('Unsupported platform');
@@ -554,6 +565,7 @@ export async function createApp({ root = dataDir, config = readConfig(root), por
     stopping = true;
     clearInterval(timer); clearInterval(pruneTimer);
     await tunnel.change('stop');
+    await signinWindow.close();
     const closed = new Promise(resolve => server.close(resolve));
     server.closeAllConnections();
     await Promise.allSettled([...requests]);

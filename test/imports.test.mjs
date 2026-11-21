@@ -210,7 +210,8 @@ test('the studio saves a YouTube sign-in without exposing it and uses it only fo
   };
   try {
     const initial = await state();
-    assert.deepEqual(initial.settings.youtubeSignin, { configured: false });
+    assert.equal(initial.settings.youtubeSignin.configured, false);
+    assert.equal(initial.settings.youtubeSignin.window.state, 'idle');
     const headers = { 'X-Studio-Token': initial.token, 'Content-Type': 'application/json' };
     const post = (path, body = {}) => fetch(base + path, { method: 'POST', headers, body: JSON.stringify(body) });
     assert.equal((await post('/api/youtube-signin', { cookies: 'not a cookies file' })).status, 400);
@@ -228,6 +229,6 @@ test('the studio saves a YouTube sign-in without exposing it and uses it only fo
     await settled((await (await post('/api/import', { workspaceId, url: 'https://vimeo.com/123', networkConsent: true })).json()).jobId);
     assert.equal(seen[1].file, null);
     assert.deepEqual(await (await post('/api/youtube-signin/remove')).json(), { configured: false });
-    assert.deepEqual((await state()).settings.youtubeSignin, { configured: false });
+    assert.equal((await state()).settings.youtubeSignin.configured, false);
   } finally { await app.close(); await rm(root, { recursive: true, force: true }); }
 });

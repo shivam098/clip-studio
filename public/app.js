@@ -96,24 +96,37 @@ function draw() {
   $('#workspace').value = workspaceId;
   const recoveries = state.jobs.filter(job => job.resource_id === workspaceId && job.recovery);
   const workspaceName = state.workspaces.find(w => w.id === workspaceId)?.name;
-  setMarkup('#import-recoveries', recoveries.map(job => `<article class="warning" aria-label="Blocked YouTube import">
-    <h3>${job.recovery.signedIn ? 'YouTube did not accept the saved sign-in' : 'YouTube needs a sign-in'}</h3>
+  const youtubeSignin = state.settings.youtubeSignin, signinWindow = youtubeSignin.window ?? { state: 'idle' };
+  const windowOpen = ['opening', 'waiting'].includes(signinWindow.state);
+  setMarkup('#import-recoveries', recoveries.map(job => {
+    const signedInSince = youtubeSignin.configured && youtubeSignin.updated > (job.finished ?? job.created);
+    const advice = signedInSince ? (job.recovery.watchUrl ? 'You have signed in to YouTube since this import failed. Import the video again.'
+      : 'You have signed in to YouTube since this import failed. Paste the link in Import from a link again.')
+      : job.recovery.signedIn ? 'YouTube refused the saved sign-in; it may have expired. Sign in to YouTube again, then import the video again.'
+      : 'YouTube refuses downloads from this cloud PC without a signed-in YouTube account. Sign in to YouTube, then import the video again.';
+    const next = signedInSince ? (job.recovery.watchUrl ? `<button type="button" data-reimport="${escape(job.id)}">Import again</button>` : '')
+      : `<button type="button" data-youtube-signin="1"${windowOpen ? ' disabled' : ''}>Sign in to YouTube</button>`;
+    return `<article class="warning" aria-label="Blocked YouTube import">
+    <h3>${signedInSince ? 'Ready to import again' : job.recovery.signedIn ? 'YouTube did not accept the saved sign-in' : 'YouTube needs a sign-in'}</h3>
     <p>Import into <strong>${escape(workspaceName)}</strong> at ${escape(new Date(job.created).toLocaleString())}.</p>
-    <p>${job.recovery.signedIn ? 'The saved YouTube sign-in was refused or has expired. Add a fresh cookies file in Privacy &amp; setup, then import the link again.'
-      : 'YouTube refuses downloads from this cloud PC without a signed-in YouTube account. Add a YouTube sign-in (cookies file) in Privacy &amp; setup, then import the link again.'}</p>
+    <p>${advice}${windowOpen ? ` A ${escape(signinWindow.browser)} sign-in window is open on the studio PC's screen.` : ''}</p>
     <p>Or choose a local video file you have permission to use. It will be added to this workspace.</p>
-    <div class="button-row"><button type="button" data-open-signin="1">Add YouTube sign-in</button>
+    <div class="button-row">${next}
     <button type="button" class="secondary" data-recovery-file="${escape(job.id)}">Choose a video file</button>
     <button type="button" class="quiet" data-recovery-dismiss="${escape(job.id)}">Dismiss</button></div>
-  </article>`).join(''));
+  </article>`;
+  }).join(''));
   if (recoveries.some(job => job.id === submittedImport)) {
     submittedImport = null;
     notify('YouTube needs a sign-in for this import. See the options under Source library.');
   }
-  const youtubeSignin = state.settings.youtubeSignin;
-  $('#youtube-signin-status').textContent = youtubeSignin.configured
-    ? `Saved: ${youtubeSignin.cookies} youtube.com cookies, updated ${new Date(youtubeSignin.updated).toLocaleString()}.`
-    : 'No YouTube sign-in saved.';
+  $('#youtube-signin-start').classList.toggle('hidden', windowOpen);
+  $('#youtube-signin-cancel').classList.toggle('hidden', !windowOpen);
+  $('#youtube-signin-status').textContent = windowOpen
+    ? `A ${signinWindow.browser} window is open on the studio PC's screen. Sign in to YouTube there; Clip Studio saves the sign-in and closes the window by itself.`
+    : [['failed', 'cancelled', 'saved'].includes(signinWindow.state) ? signinWindow.message : '',
+      youtubeSignin.configured ? `Signed in: ${youtubeSignin.cookies} youtube.com cookies saved ${new Date(youtubeSignin.updated).toLocaleString()}.`
+        : 'Not signed in to YouTube.'].filter(Boolean).join(' ');
   const assets = state.assets.filter(a => a.workspace_id === workspaceId);
   const clips = state.clips.filter(c => assets.some(a => a.id === c.asset_id));
   setMarkup('#assets', assets.map(a => `<button class="asset ${a.id === assetId ? 'active' : ''}" data-asset="${a.id}"><span class="asset-icon">▶</span><strong>${escape(a.name)}</strong><small>${seconds(a.duration)} · ${a.width} × ${a.height}${a.audio ? ' · audio' : ' · silent'}</small></button>`).join(''));
@@ -259,6 +272,16 @@ action('#youtube-signin-form', async () => {
   $('#youtube-cookies').value = '';
   notify(`YouTube sign-in saved (${result.cookies} youtube.com cookies). Import your YouTube link again.`);
 }, 'submit');
+async function startYouTubeSignin() {
+  const result = await api('/api/youtube-signin/start');
+  if (result.state === 'failed') throw new Error(result.message);
+  notify(`A ${result.browser} window is opening on the studio PC's screen. Sign in to YouTube there; Clip Studio saves the sign-in by itself.`);
+}
+action('#youtube-signin-start', startYouTubeSignin);
+action('#youtube-signin-cancel', async () => {
+  await api('/api/youtube-signin/cancel');
+  notify('YouTube sign-in cancelled. The window was closed.');
+});
 action('#youtube-signin-remove', async () => {
   await api('/api/youtube-signin/remove');
   notify('YouTube sign-in removed. YouTube imports from this PC will ask for one again.');
@@ -271,10 +294,14 @@ document.addEventListener('click', async event => {
   if (!Object.keys(d).length || d.tab) return;
   button.disabled = true;
   try {
-    if (d.openSignin) {
-      tab('settings');
-      $('#youtube-cookies').focus();
-      return;
+    if (d.youtubeSignin) await startYouTubeSignin();
+    if (d.reimport) {
+      const job = state.jobs.find(j => j.id === d.reimport && j.recovery?.watchUrl);
+      if (!job) throw new Error('This import is no longer available');
+      const result = await api('/api/import', { workspaceId: job.resource_id, url: job.recovery.watchUrl, networkConsent: true });
+      await api(`/api/jobs/${job.id}/dismiss-recovery`);
+      submittedImport = result.jobId;
+      notify('Importing again with your YouTube sign-in. See Activity for the result.');
     }
     if (d.recoveryFile) {
       const job = state.jobs.find(j => j.id === d.recoveryFile && j.resource_id === workspaceId && j.recovery);

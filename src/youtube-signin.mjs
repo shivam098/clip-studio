@@ -8,11 +8,16 @@ const settingKey = 'youtubeSignin';
 const maxFile = 1_000_000;
 const youtubeHosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 // YouTube sets these only for a signed-in account.
-const sessionCookies = new Set(['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', 'LOGIN_INFO',
+export const sessionCookies = new Set(['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', 'LOGIN_INFO',
   '__Secure-1PSID', '__Secure-3PSID', '__Secure-1PAPISID', '__Secure-3PAPISID']);
 
 export function isYouTubeUrl(value) {
   try { return youtubeHosts.has(new URL(value).hostname); } catch { return false; }
+}
+
+export function isYouTubeDomain(value) {
+  const domain = String(value ?? '').replace(/^\./, '').toLowerCase();
+  return domain === 'youtube.com' || domain.endsWith('.youtube.com');
 }
 
 // Accepts a Netscape-format cookies.txt export and keeps only its youtube.com cookies.
@@ -26,8 +31,7 @@ export function youtubeCookies(contents) {
     if (!entry.trim() || entry.startsWith('#')) continue;
     const fields = entry.split('\t');
     if (fields.length !== 7) continue;
-    const domain = fields[0].replace(/^\./, '').toLowerCase();
-    if (domain !== 'youtube.com' && !domain.endsWith('.youtube.com')) continue;
+    if (!isYouTubeDomain(fields[0])) continue;
     kept.push(line);
     if (sessionCookies.has(fields[5])) signedIn = true;
   }

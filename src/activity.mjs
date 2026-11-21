@@ -25,6 +25,8 @@ const routes = new Map(Object.entries({
   'POST /api/settings': 'Changed studio settings',
   'POST /api/youtube-signin': 'Saved YouTube sign-in',
   'POST /api/youtube-signin/remove': 'Removed YouTube sign-in',
+  'POST /api/youtube-signin/start': 'Opened YouTube sign-in window',
+  'POST /api/youtube-signin/cancel': 'Cancelled YouTube sign-in window',
   'POST /api/accounts': 'Added publishing account',
   'POST /api/accounts/:id': 'Changed publishing account',
   'POST /api/accounts/:id/verify': 'Verified publishing account',
