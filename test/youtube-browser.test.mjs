@@ -136,10 +136,14 @@ test('closing, cancelling, a Google refusal or a timeout ends the attempt withou
     const result = await cancelled.window.cancel();
     assert.equal(result.state, 'cancelled'); assert.equal(cancelled.calls.closed, 1);
     assert.equal(cancelled.window.session, null);
+    cancelled.window.current.finished -= 3 * 60_000;
+    assert.deepEqual(cancelled.window.status(), { state: 'idle' });
 
     const refused = await attempt([{ cookies: anonymous, pages: [{ url: 'https://accounts.google.com/v3/signin/rejected?continue=x' }] }]);
     await until(() => refused.window.status().state === 'failed');
     assert.match(refused.window.status().message, /Google refused to sign in/);
+    refused.window.current.finished -= 3 * 60_000;
+    assert.equal(refused.window.status().state, 'failed');
 
     const slow = await attempt(waiting, { timeoutMs: 20 });
     await until(() => slow.window.status().state === 'failed');

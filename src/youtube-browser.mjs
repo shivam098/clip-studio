@@ -139,17 +139,21 @@ export function toNetscape(cookies) {
 // in, saves the youtube.com cookies as the studio's YouTube sign-in, then closes the window and deletes the profile.
 export class YouTubeSigninWindow {
   constructor(root, signin, { findExecutable = () => findBrowser(), open = openBrowser, onSaved = () => {},
-    pollMs = 1500, settleMs = 3000, timeoutMs = 15 * 60_000 } = {}) {
+    pollMs = 1500, settleMs = 3000, timeoutMs = 15 * 60_000, noteMs = 2 * 60_000 } = {}) {
     this.folder = join(root, 'youtube-signin-window');
     this.signin = signin; this.findExecutable = findExecutable; this.open = open; this.onSaved = onSaved;
-    this.pollMs = pollMs; this.settleMs = settleMs; this.timeoutMs = timeoutMs;
+    this.pollMs = pollMs; this.settleMs = settleMs; this.timeoutMs = timeoutMs; this.noteMs = noteMs;
     this.current = { state: 'idle' };
     this.session = null;
     this.running = new Set();
   }
   // Removes profiles left behind if the server stopped while a window was open.
   async init() { await rm(this.folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {}); }
-  status() { return { ...this.current }; }
+  status() {
+    // "Saved" and "cancelled" notes are shown briefly; a failure stays until the next attempt.
+    if (['saved', 'cancelled'].includes(this.current.state) && Date.now() - this.current.finished > this.noteMs) return { state: 'idle' };
+    return { ...this.current };
+  }
   start(email = null) {
     if (this.session && !this.session.settled) return this.status();
     const executable = this.findExecutable();
